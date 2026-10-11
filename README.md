@@ -25,6 +25,9 @@ cmake -S . -B build -G "Visual Studio 17 2022" -A x64
 cmake --build build --config Release
 ```
 
+On Windows, build from a short folder path (for example `C:\dev\PitchPaint`): MSBuild fails when the build
+folder is nested very deeply (paths over ~260 characters inside JUCE's helper build).
+
 The plugin ends up in `build/PitchPaint_artefacts/Release/VST3/PitchPaint.vst3`. Copy it to
 `C:\Program Files\Common Files\VST3`, or add that folder to your host's VST3 search paths.
 
