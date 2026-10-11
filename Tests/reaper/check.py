@@ -1,4 +1,5 @@
 """Checks the MIDI-monitor renders from run.ps1 against PitchPaint's demo pattern. Standard library only."""
+import base64
 import math
 import struct
 import sys
@@ -9,13 +10,41 @@ GUARD = 0.05      # beats skipped around note starts/ends, where the block-quant
 BOUNDARIES = (0.0, 2.0, 6.0, 7.5, 8.0)
 
 
+def curve1(b):
+    return 60 + 7 * math.sin(2 * math.pi * b / 4)
+
+
+def curve2(b):
+    return 72 + 5 * math.sin(2 * math.pi * (b - 2) / 4)
+
+
+def make_chunk(path):
+    """Writes the test pattern as a REAPER VST3 state chunk (base64) for make_projects.lua to load into PitchPaint.
+    Layout: u32 component size, u32 1, component state (JUCE: 'VC2!' + u32 length + XML), 8-byte empty trailer."""
+    def sample(tid, start, end, f):
+        pts, b = [], start
+        while b < end:
+            pts.append((b, f(b)))
+            b += 1 / 32
+        pts.append((end, f(end)))
+        return f"t {tid} " + " ".join(f"{b!r} {p!r}" for b, p in pts)
+
+    pattern = "\n".join(["PitchPaintPattern 1", "length 8", sample(1, 0.0, 7.5, curve1), sample(2, 2.0, 6.0, curve2)]) + "\n"
+    xml = f'<?xml version="1.0" encoding="UTF-8"?>\n<PitchPaint version="1"><Pattern>{pattern}</Pattern></PitchPaint>'
+    data = xml.encode() + b"\0"
+    component = b"VC2!" + struct.pack("<I", len(data)) + data
+    chunk = struct.pack("<II", len(component), 1) + component + b"\0" * 8
+    with open(path, "w") as f:
+        f.write(base64.b64encode(chunk).decode())
+
+
 def curves(local):
-    """(start beat, pitch) of each demo trajectory sounding at `local` (see makeDemoPattern in PluginProcessor.cpp)."""
+    """(start beat, pitch) of each test trajectory sounding at `local` (the pattern make_chunk loads)."""
     out = []
     if 0.0 <= local < 7.5:
-        out.append((0.0, 60 + 7 * math.sin(2 * math.pi * local / 4)))
+        out.append((0.0, curve1(local)))
     if 2.0 <= local < 6.0:
-        out.append((2.0, 72 + 5 * math.sin(2 * math.pi * (local - 2) / 4)))
+        out.append((2.0, curve2(local)))
     return out
 
 
@@ -113,6 +142,9 @@ def check_preview(path, beats_per_second=2.0):
 
 
 if __name__ == "__main__":
+    if sys.argv[1] == "--make-chunk":
+        make_chunk(sys.argv[2])
+        sys.exit(0)
     d = sys.argv[1]
     ok = check(f"{d}/mpe.wav", "mpe", 48)
     ok &= check(f"{d}/mono.wav", "mono", 12)

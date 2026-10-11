@@ -1,6 +1,9 @@
 #include "Pattern.h"
 
 #include <algorithm>
+#include <charconv>
+#include <cmath>
+#include <limits>
 
 namespace pitchpaint
 {
@@ -49,6 +52,129 @@ void drawSegment (Trajectory& t, PitchPoint from, PitchPoint to)
     const auto pos = std::lower_bound (pts.begin(), pts.end(), to.beat,
                                        [] (const PitchPoint& p, double b) { return p.beat < b; });
     pts.insert (pos, to);
+}
+
+void moveTrajectories (Pattern& p, const std::vector<std::uint32_t>& ids, double deltaBeats, double deltaPitch)
+{
+    const auto selected = [&] (const Trajectory& t) { return std::find (ids.begin(), ids.end(), t.id) != ids.end(); };
+
+    double minBeat = std::numeric_limits<double>::max(), maxBeat = std::numeric_limits<double>::lowest();
+    double minPitch = minBeat, maxPitch = maxBeat;
+    for (const auto& t : p.trajectories)
+        if (selected (t))
+            for (const auto& pt : t.points)
+            {
+                minBeat = std::min (minBeat, pt.beat);
+                maxBeat = std::max (maxBeat, pt.beat);
+                minPitch = std::min (minPitch, pt.pitch);
+                maxPitch = std::max (maxPitch, pt.pitch);
+            }
+
+    if (minBeat > maxBeat)
+        return; // nothing selected
+
+    const auto limit = [] (double d, double lo, double hi) { return std::clamp (d, lo, std::max (lo, hi)); };
+    deltaBeats = limit (deltaBeats, -minBeat, p.lengthBeats - maxBeat);
+    deltaPitch = limit (deltaPitch, -minPitch, 127.0 - maxPitch);
+
+    for (auto& t : p.trajectories)
+        if (selected (t))
+            for (auto& pt : t.points)
+            {
+                pt.beat += deltaBeats;
+                pt.pitch += deltaPitch;
+            }
+}
+
+namespace
+{
+    constexpr const char* header = "PitchPaintPattern 1";
+
+    void appendNumber (std::string& s, double v)
+    {
+        char buf[32];
+        const auto r = std::to_chars (buf, buf + sizeof (buf), v); // shortest form that round-trips exactly
+        s.append (buf, r.ptr);
+    }
+}
+
+std::string serialise (const Pattern& p)
+{
+    std::string s = header;
+    s += "\nlength ";
+    appendNumber (s, p.lengthBeats);
+
+    for (const auto& t : p.trajectories)
+    {
+        s += "\nt " + std::to_string (t.id);
+        for (const auto& pt : t.points)
+        {
+            s += ' ';
+            appendNumber (s, pt.beat);
+            s += ' ';
+            appendNumber (s, pt.pitch);
+        }
+    }
+    return s + "\n";
+}
+
+std::optional<Pattern> parsePattern (const std::string& text)
+{
+    const char* pos = text.data();
+    const char* const end = pos + text.size();
+
+    const auto skipSpace = [&] { while (pos < end && (*pos == ' ' || *pos == '\n' || *pos == '\r' || *pos == '\t')) ++pos; };
+    const auto word = [&]
+    {
+        skipSpace();
+        const char* start = pos;
+        while (pos < end && ! (*pos == ' ' || *pos == '\n' || *pos == '\r' || *pos == '\t')) ++pos;
+        return std::string (start, pos);
+    };
+    const auto number = [&] (double& out)
+    {
+        skipSpace();
+        const auto r = std::from_chars (pos, end, out);
+        if (r.ec != std::errc() || ! std::isfinite (out))
+            return false;
+        pos = r.ptr;
+        return true;
+    };
+    const auto atLineEnd = [&]
+    {
+        while (pos < end && (*pos == ' ' || *pos == '\t' || *pos == '\r')) ++pos;
+        return pos >= end || *pos == '\n';
+    };
+
+    const auto magic = word();
+    const auto version = word();
+    if (magic + " " + version != header || word() != "length")
+        return std::nullopt;
+
+    Pattern p;
+    if (! number (p.lengthBeats) || p.lengthBeats <= 0.0)
+        return std::nullopt;
+
+    for (skipSpace(); pos < end; skipSpace())
+    {
+        double id = 0.0;
+        if (word() != "t" || ! number (id) || id < 1.0 || id > 4294967295.0)
+            return std::nullopt;
+
+        Trajectory t { (std::uint32_t) id, {} };
+        while (! atLineEnd())
+        {
+            PitchPoint pt {};
+            if (! number (pt.beat) || ! number (pt.pitch))
+                return std::nullopt;
+            t.points.push_back (pt);
+        }
+
+        std::stable_sort (t.points.begin(), t.points.end(), [] (const PitchPoint& a, const PitchPoint& b) { return a.beat < b.beat; });
+        p.trajectories.push_back (std::move (t));
+    }
+
+    return p;
 }
 
 } // namespace pitchpaint

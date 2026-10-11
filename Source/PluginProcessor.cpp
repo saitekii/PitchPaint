@@ -1,31 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
-namespace
-{
-    // Until the drawing canvas exists: the spike's two test curves, sampled into trajectories.
-    pitchpaint::Pattern makeDemoPattern()
-    {
-        using namespace pitchpaint;
-        constexpr double twoPi = juce::MathConstants<double>::twoPi;
-
-        const auto sample = [] (std::uint32_t id, double start, double end, auto&& pitchAt)
-        {
-            Trajectory t { id, {} };
-            for (double b = start; b < end; b += 1.0 / 32.0)
-                t.points.push_back ({ b, pitchAt (b) });
-            t.points.push_back ({ end, pitchAt (end) });
-            return t;
-        };
-
-        Pattern p;
-        p.lengthBeats = 8.0;
-        p.trajectories.push_back (sample (1, 0.0, 7.5, [] (double b) { return 60.0 + 7.0 * std::sin (twoPi * b / 4.0); }));
-        p.trajectories.push_back (sample (2, 2.0, 6.0, [] (double b) { return 72.0 + 5.0 * std::sin (twoPi * (b - 2.0) / 4.0); }));
-        return p;
-    }
-}
-
 PitchPaintProcessor::PitchPaintProcessor()
     : AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       params (*this, nullptr, "PARAMS",
@@ -33,7 +8,6 @@ PitchPaintProcessor::PitchPaintProcessor()
                                                               juce::StringArray { "MPE", "Mono pitch-bend" }, 0),
                 std::make_unique<juce::AudioParameterInt> (juce::ParameterID { "bendRange", 1 }, "Bend range (semitones)", 1, 96, 48),
                 std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "preview", 1 }, "Preview sound", false) }),
-      pattern (makeDemoPattern()),
       snapshots (pattern)
 {
 }
@@ -43,6 +17,38 @@ void PitchPaintProcessor::setPattern (pitchpaint::Pattern p)
     pattern = std::move (p);
     ++patternVersion;
     snapshots.publish (pattern);
+}
+
+void PitchPaintProcessor::applyEdit (pitchpaint::Pattern p)
+{
+    if (p == pattern)
+        return;
+    history.record (pattern);
+    setPattern (std::move (p));
+}
+
+void PitchPaintProcessor::beginGesture()
+{
+    gestureStart = pattern;
+}
+
+void PitchPaintProcessor::endGesture()
+{
+    if (gestureStart && *gestureStart != pattern)
+        history.record (std::move (*gestureStart));
+    gestureStart.reset();
+}
+
+void PitchPaintProcessor::undo()
+{
+    if (auto previous = history.undo (pattern))
+        setPattern (std::move (*previous));
+}
+
+void PitchPaintProcessor::redo()
+{
+    if (auto next = history.redo (pattern))
+        setPattern (std::move (*next));
 }
 
 void PitchPaintProcessor::prepareToPlay (double sr, int)
@@ -125,16 +131,47 @@ juce::AudioProcessorEditor* PitchPaintProcessor::createEditor()
     return new PitchPaintEditor (*this);
 }
 
+// State: <PitchPaint version="1"> <PARAMS .../> <Pattern>serialised text</Pattern> </PitchPaint>
 void PitchPaintProcessor::getStateInformation (juce::MemoryBlock& dest)
 {
-    if (auto xml = params.copyState().createXml())
-        copyXmlToBinary (*xml, dest);
+    // Hosts may ask from any thread: read the published snapshot, not the message-thread copy.
+    const auto current = snapshots.acquire();
+
+    juce::XmlElement root ("PitchPaint");
+    root.setAttribute ("version", 1);
+    if (auto paramsXml = params.copyState().createXml())
+        root.addChildElement (paramsXml.release());
+    root.createNewChildElement ("Pattern")->addTextElement (juce::String (pitchpaint::serialise (*current)));
+    copyXmlToBinary (root, dest);
 }
 
 void PitchPaintProcessor::setStateInformation (const void* data, int size)
 {
-    if (auto xml = getXmlFromBinary (data, size))
-        params.replaceState (juce::ValueTree::fromXml (*xml));
+    const auto xml = getXmlFromBinary (data, size);
+    if (xml == nullptr)
+        return;
+
+    // Version 0 (before patterns were saved) stored just the parameter tree.
+    const auto* paramsXml = xml->hasTagName ("PitchPaint") ? xml->getChildByName (params.state.getType()) : xml.get();
+    if (paramsXml != nullptr && paramsXml->hasTagName (params.state.getType()))
+        params.replaceState (juce::ValueTree::fromXml (*paramsXml));
+
+    auto loaded = pitchpaint::Pattern {};
+    if (const auto* patternXml = xml->getChildByName ("Pattern"))
+        if (auto parsed = pitchpaint::parsePattern (patternXml->getAllSubText().toStdString()))
+            loaded = std::move (*parsed);
+
+    const auto apply = [this, loaded]
+    {
+        history.clear();
+        gestureStart.reset();
+        setPattern (loaded);
+    };
+
+    if (juce::MessageManager::existsAndIsCurrentThread())
+        apply();
+    else
+        juce::MessageManager::callAsync (apply); // the editable copy is message-thread only
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()

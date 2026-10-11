@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
+#include <string>
 #include <vector>
 
 namespace pitchpaint
@@ -11,6 +13,8 @@ struct PitchPoint
 {
     double beat;
     double pitch;
+
+    bool operator== (const PitchPoint&) const = default;
 };
 
 // One drawn stroke: a pitch curve over time that sounds as a single note.
@@ -26,6 +30,8 @@ struct Trajectory
 
     // Linear interpolation, clamped to the end points outside the curve.
     double pitchAt (double beat) const;
+
+    bool operator== (const Trajectory&) const = default;
 };
 
 // A loop of trajectories. Parts of trajectories beyond lengthBeats don't play.
@@ -35,7 +41,15 @@ struct Pattern
     std::vector<Trajectory> trajectories;
 
     std::uint32_t nextId() const;
+    bool operator== (const Pattern&) const = default;
 };
+
+// Shifts the given trajectories in time and pitch. The shift is limited so they stay inside the loop and 0..127.
+void moveTrajectories (Pattern&, const std::vector<std::uint32_t>& ids, double deltaBeats, double deltaPitch);
+
+// Lossless plain-text form, used for plugin state. Parsing returns nothing for malformed text.
+std::string serialise (const Pattern&);
+std::optional<Pattern> parsePattern (const std::string&);
 
 // Pencil stroke step from `from` to `to`: whatever the trajectory had strictly between the two beats is replaced
 // by the straight segment, so drawing back over a stroke redraws it, and drawing left of its start extends it.

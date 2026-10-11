@@ -31,11 +31,13 @@ namespace
     }
 
     constexpr float eraseRadius = 8.0f;
+    constexpr float hitRadius = 6.0f;
 }
 
 PitchCanvas::PitchCanvas (PitchPaintProcessor& p) : processor (p)
 {
     setOpaque (true);
+    setWantsKeyboardFocus (true); // keys bubble up to the editor's shortcuts
     startTimerHz (30);
 }
 
@@ -124,6 +126,7 @@ void PitchCanvas::paintTrajectories (juce::Graphics& g, const pitchpaint::Patter
         if (t.points.empty())
             continue;
 
+        const bool selected = isSelected (t.id);
         g.setColour (trajectoryColour (t.id));
 
         if (t.points.size() == 1)
@@ -138,7 +141,21 @@ void PitchCanvas::paintTrajectories (juce::Graphics& g, const pitchpaint::Patter
         for (size_t i = 1; i < t.points.size(); ++i)
             path.lineTo (beatToX (t.points[i].beat), pitchToY (t.points[i].pitch));
 
-        g.strokePath (path, juce::PathStrokeType (2.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        if (selected)
+        {
+            g.setColour (juce::Colours::white.withAlpha (0.85f));
+            g.strokePath (path, juce::PathStrokeType (6.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+            g.setColour (trajectoryColour (t.id));
+        }
+        g.strokePath (path, juce::PathStrokeType (selected ? 3.0f : 2.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    }
+
+    if (! box.isEmpty())
+    {
+        g.setColour (juce::Colours::white.withAlpha (0.08f));
+        g.fillRect (box);
+        g.setColour (juce::Colours::white.withAlpha (0.5f));
+        g.drawRect (box, 1.0f);
     }
 }
 
@@ -173,6 +190,12 @@ void PitchCanvas::timerCallback()
     if (const int version = processor.getPatternVersion(); version != lastSeenVersion)
     {
         lastSeenVersion = version;
+
+        // Undo, state loads etc. can remove trajectories: drop them from the selection.
+        const auto& pattern = processor.getPattern();
+        std::erase_if (selection, [&] (std::uint32_t id)
+                       { return std::none_of (pattern.trajectories.begin(), pattern.trajectories.end(),
+                                              [id] (const auto& t) { return t.id == id; }); });
         if (onPatternChanged)
             onPatternChanged();
         repaint();
@@ -187,20 +210,118 @@ void PitchCanvas::timerCallback()
 }
 
 //==============================================================================
-bool PitchCanvas::isErasing (const juce::MouseEvent& e) const
+std::vector<juce::Line<float>> PitchCanvas::segmentsOf (const pitchpaint::Trajectory& t) const
 {
-    return tool == Tool::eraser || e.mods.isRightButtonDown();
+    std::vector<juce::Line<float>> lines;
+    if (t.points.size() == 1)
+    {
+        const juce::Point<float> a { beatToX (t.points[0].beat), pitchToY (t.points[0].pitch) };
+        lines.push_back ({ a, a });
+    }
+    for (size_t i = 0; i + 1 < t.points.size(); ++i)
+        lines.push_back ({ { beatToX (t.points[i].beat), pitchToY (t.points[i].pitch) },
+                           { beatToX (t.points[i + 1].beat), pitchToY (t.points[i + 1].pitch) } });
+    return lines;
 }
 
+bool PitchCanvas::sweepHits (const pitchpaint::Trajectory& t, juce::Line<float> swept, float radius) const
+{
+    const auto distance = [] (juce::Line<float> a, juce::Line<float> b)
+    {
+        juce::Point<float> p;
+        if (a.intersects (b, p))
+            return 0.0f;
+        return std::min ({ a.getDistanceFromPoint (b.getStart(), p), a.getDistanceFromPoint (b.getEnd(), p),
+                           b.getDistanceFromPoint (a.getStart(), p), b.getDistanceFromPoint (a.getEnd(), p) });
+    };
+
+    for (const auto& seg : segmentsOf (t))
+        if (distance (swept, seg) <= radius)
+            return true;
+    return false;
+}
+
+std::uint32_t PitchCanvas::trajectoryAt (juce::Point<float> pos) const
+{
+    const auto& trajectories = processor.getPattern().trajectories;
+    for (auto it = trajectories.rbegin(); it != trajectories.rend(); ++it) // topmost (last drawn) first
+        if (sweepHits (*it, { pos, pos }, hitRadius))
+            return it->id;
+    return 0;
+}
+
+bool PitchCanvas::isSelected (std::uint32_t id) const
+{
+    return std::find (selection.begin(), selection.end(), id) != selection.end();
+}
+
+void PitchCanvas::selectAll()
+{
+    selection.clear();
+    for (const auto& t : processor.getPattern().trajectories)
+        selection.push_back (t.id);
+    repaint();
+}
+
+void PitchCanvas::clearSelection()
+{
+    selection.clear();
+    repaint();
+}
+
+void PitchCanvas::deleteSelection()
+{
+    if (selection.empty())
+        return;
+    auto pattern = processor.getPattern();
+    std::erase_if (pattern.trajectories, [this] (const auto& t) { return isSelected (t.id); });
+    selection.clear();
+    processor.applyEdit (std::move (pattern));
+    repaint();
+}
+
+//==============================================================================
 void PitchCanvas::mouseDown (const juce::MouseEvent& e)
 {
-    if (isErasing (e))
+    dragStart = e.position;
+    processor.beginGesture();
+
+    if (tool == Tool::eraser || e.mods.isRightButtonDown())
     {
+        drag = Drag::erasing;
         lastErasePos = e.position;
         eraseAlong (e.position, e.position);
         return;
     }
 
+    if (tool == Tool::select)
+    {
+        const auto hit = trajectoryAt (e.position);
+        if (hit != 0)
+        {
+            if (e.mods.isShiftDown() && isSelected (hit))
+                std::erase (selection, hit);
+            else if (e.mods.isShiftDown())
+                selection.push_back (hit);
+            else if (! isSelected (hit))
+                selection = { hit };
+
+            drag = isSelected (hit) ? Drag::moving : Drag::none;
+            moveBase = processor.getPattern();
+        }
+        else
+        {
+            if (! e.mods.isShiftDown())
+                selection.clear();
+            drag = Drag::boxSelecting;
+            boxBase = selection;
+            box = {};
+        }
+        repaint();
+        return;
+    }
+
+    drag = Drag::drawing;
     auto pattern = processor.getPattern();
     lastPoint = pointAt (e.position, e.mods.isShiftDown());
     drawingId = pattern.nextId();
@@ -211,76 +332,91 @@ void PitchCanvas::mouseDown (const juce::MouseEvent& e)
 
 void PitchCanvas::mouseDrag (const juce::MouseEvent& e)
 {
-    if (isErasing (e))
+    switch (drag)
     {
-        eraseAlong (lastErasePos, e.position);
-        lastErasePos = e.position;
-        return;
+        case Drag::erasing:
+            eraseAlong (lastErasePos, e.position);
+            lastErasePos = e.position;
+            break;
+
+        case Drag::moving:
+        {
+            const auto area = plotArea();
+            const double deltaBeats = (e.position.x - dragStart.x) / area.getWidth() * moveBase.lengthBeats;
+            double deltaPitch = -(e.position.y - dragStart.y) / area.getHeight() * (topPitch - bottomPitch);
+            if (e.mods.isShiftDown())
+                deltaPitch = std::round (deltaPitch); // keep intonation: move by whole semitones
+
+            auto pattern = moveBase;
+            pitchpaint::moveTrajectories (pattern, selection, deltaBeats, deltaPitch);
+            processor.setPattern (std::move (pattern));
+            repaint();
+            break;
+        }
+
+        case Drag::boxSelecting:
+        {
+            box = juce::Rectangle<float> (dragStart, e.position);
+            selection = boxBase;
+            for (const auto& t : processor.getPattern().trajectories)
+            {
+                if (isSelected (t.id))
+                    continue;
+                for (const auto& seg : segmentsOf (t))
+                    if (box.contains (seg.getStart()) || box.intersects (seg))
+                    {
+                        selection.push_back (t.id);
+                        break;
+                    }
+            }
+            repaint();
+            break;
+        }
+
+        case Drag::drawing:
+        {
+            const auto point = pointAt (e.position, e.mods.isShiftDown());
+            if (point.beat == lastPoint.beat && point.pitch == lastPoint.pitch)
+                break;
+
+            auto pattern = processor.getPattern();
+            for (auto& t : pattern.trajectories)
+                if (t.id == drawingId)
+                    pitchpaint::drawSegment (t, lastPoint, point);
+
+            lastPoint = point;
+            processor.setPattern (std::move (pattern));
+            repaint();
+            break;
+        }
+
+        case Drag::none:
+            break;
     }
-
-    if (drawingId == 0)
-        return;
-
-    const auto point = pointAt (e.position, e.mods.isShiftDown());
-    if (point.beat == lastPoint.beat && point.pitch == lastPoint.pitch)
-        return;
-
-    auto pattern = processor.getPattern();
-    for (auto& t : pattern.trajectories)
-        if (t.id == drawingId)
-            pitchpaint::drawSegment (t, lastPoint, point);
-
-    lastPoint = point;
-    processor.setPattern (std::move (pattern));
-    repaint();
 }
 
 void PitchCanvas::mouseUp (const juce::MouseEvent&)
 {
-    if (drawingId == 0)
-        return;
+    if (drag == Drag::drawing)
+    {
+        // A click without a drag leaves a single point that can't sound: drop it.
+        auto pattern = processor.getPattern();
+        if (std::erase_if (pattern.trajectories, [this] (const auto& t) { return t.id == drawingId && ! t.isPlayable(); }) > 0)
+            processor.setPattern (std::move (pattern));
+        drawingId = 0;
+    }
 
-    // A click without a drag leaves a single point that can't sound: drop it.
-    auto pattern = processor.getPattern();
-    const auto removed = std::erase_if (pattern.trajectories, [this] (const pitchpaint::Trajectory& t)
-                                        { return t.id == drawingId && ! t.isPlayable(); });
-    if (removed > 0)
-        processor.setPattern (std::move (pattern));
-
-    drawingId = 0;
+    processor.endGesture(); // one undo step for the whole stroke / move / erase swipe
+    drag = Drag::none;
+    box = {};
     repaint();
 }
 
 void PitchCanvas::eraseAlong (juce::Point<float> from, juce::Point<float> to)
 {
     // Erase every trajectory the mouse swept over since the last event, so fast swipes don't skip strokes.
-    const juce::Line<float> swept (from, to);
-
-    const auto distance = [] (juce::Line<float> a, juce::Line<float> b)
-    {
-        juce::Point<float> p;
-        if (a.intersects (b, p))
-            return 0.0f;
-        return std::min ({ a.getDistanceFromPoint (b.getStart(), p), a.getDistanceFromPoint (b.getEnd(), p),
-                           b.getDistanceFromPoint (a.getStart(), p), b.getDistanceFromPoint (a.getEnd(), p) });
-    };
-
-    const auto hits = [&] (const pitchpaint::Trajectory& t)
-    {
-        for (size_t i = 0; i < t.points.size(); ++i)
-        {
-            const juce::Point<float> a { beatToX (t.points[i].beat), pitchToY (t.points[i].pitch) };
-            const auto b = i + 1 < t.points.size()
-                             ? juce::Point<float> { beatToX (t.points[i + 1].beat), pitchToY (t.points[i + 1].pitch) }
-                             : a;
-            if (distance (swept, { a, b }) <= eraseRadius)
-                return true;
-        }
-        return false;
-    };
-
     auto pattern = processor.getPattern();
-    if (std::erase_if (pattern.trajectories, hits) > 0)
+    if (std::erase_if (pattern.trajectories, [&] (const auto& t) { return sweepHits (t, { from, to }, eraseRadius); }) > 0)
     {
         processor.setPattern (std::move (pattern));
         repaint();

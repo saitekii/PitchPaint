@@ -1,4 +1,4 @@
-﻿# End-to-end check: PitchPaint's MIDI output as REAPER delivers it to the next plugin in the chain.
+# End-to-end check: PitchPaint's MIDI output as REAPER delivers it to the next plugin in the chain.
 # Uses an isolated REAPER config (-cfgfile) under build/, so your normal REAPER settings are untouched,
 # and REAPER's Dummy Audio device (audioconfig mode=4), so a busy or missing audio interface can't block it.
 # REAPER is never asked to quit (that can raise a "save project?" prompt): this script waits until REAPER's
@@ -24,7 +24,7 @@ if (-not (Test-Path "$vst3Dir\PitchPaint.vst3")) { throw "Build the plugin first
 $work = "$root\build\reaper-test"
 New-Item -ItemType Directory -Force "$work\Effects" | Out-Null
 Copy-Item "$PSScriptRoot\pp_midimon.jsfx" "$work\Effects\" -Force
-Remove-Item "$work\*.wav", "$work\*.rpp", "$work\make_projects.log" -ErrorAction SilentlyContinue
+Remove-Item "$work\*.wav", "$work\*.rpp", "$work\make_projects.log", "$work\pattern_chunk.txt" -ErrorAction SilentlyContinue
 @"
 [REAPER]
 vstpath64=$vst3Dir
@@ -53,6 +53,7 @@ function Test-FileSettled([string]$path) {
     return $a -gt 0 -and $a -eq $b
 }
 
+python "$PSScriptRoot\check.py" --make-chunk "$work\pattern_chunk.txt"
 $env:PITCHPAINT_TEST_DIR = $work
 Invoke-Reaper @("`"$PSScriptRoot\make_projects.lua`"") { Test-Path "$work\make_projects.log" }
 $log = Get-Content "$work\make_projects.log" -ErrorAction SilentlyContinue

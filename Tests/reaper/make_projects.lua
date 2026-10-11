@@ -1,6 +1,9 @@
 -- Run by run.ps1 inside REAPER: builds the test projects (PitchPaint -> MIDI monitor JSFX, and PitchPaint's own
 -- preview sound). It does not quit REAPER (that can prompt to save); run.ps1 ends the process once the log is written.
 local dir = os.getenv("PITCHPAINT_TEST_DIR")
+local chunkFile = io.open(dir .. "/pattern_chunk.txt", "r")
+local chunk = chunkFile:read("a")
+chunkFile:close()
 
 local function make(name, mode, range, preview)
   reaper.Main_OnCommand(40859, 0) -- new project tab
@@ -11,6 +14,7 @@ local function make(name, mode, range, preview)
   local tr = reaper.GetTrack(0, 0)
   local pp = reaper.TrackFX_AddByName(tr, "VST3:PitchPaint", false, -1)
   reaper.TrackFX_Show(tr, pp, 2) -- close any auto-floated FX window
+  local loaded = reaper.TrackFX_SetNamedConfigParm(tr, pp, "vst_chunk", chunk) -- the test pattern (check.py --make-chunk)
   reaper.TrackFX_SetParam(tr, pp, 0, mode)
   reaper.TrackFX_SetParam(tr, pp, 1, (range - 1) / 95)
   reaper.TrackFX_SetParam(tr, pp, 2, preview and 1 or 0)
@@ -35,7 +39,7 @@ local function make(name, mode, range, preview)
   reaper.GetSetProjectInfo(0, "RENDER_CHANNELS", channels, true)
   reaper.Main_SaveProjectEx(0, dir .. "/" .. name .. ".rpp", 0)
   reaper.Main_OnCommand(40860, 0) -- close project tab
-  return pp >= 0 and mon >= 0
+  return pp >= 0 and mon >= 0 and loaded
 end
 
 local ok = make("mpe", 0, 48, false) and make("mono", 1, 12, false) and make("preview", 1, 12, true)

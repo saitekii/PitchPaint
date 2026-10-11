@@ -169,11 +169,83 @@ int main (int argc, char** argv)
           juce::ModifierKeys (juce::ModifierKeys::rightButtonModifier));
     CHECK (proc.getPattern().trajectories.size() == 2);
 
-    // 4. Loop length change applies to the pattern.
-    auto changed = proc.getPattern();
-    changed.lengthBeats = 4.0;
-    proc.setPattern (changed);
-    CHECK (proc.getPattern().lengthBeats == 4.0);
+    // 4. Undo brings the erased stroke back in one step (the whole swipe is one gesture); redo removes it again.
+    const auto press = [&] (juce::KeyPress k) { return editor->keyPressed (k); };
+    const auto ctrl = [] (char c) { return juce::KeyPress (c, juce::ModifierKeys::commandModifier, 0); };
+    CHECK (press (ctrl ('z')) && proc.getPattern().trajectories.size() == 3);
+    CHECK (press (ctrl ('y')) && proc.getPattern().trajectories.size() == 2);
+
+    // Drawing a stroke (many drag events) is also a single undo step.
+    const auto beforeStroke = proc.getPattern();
+    drag (*canvas, { at (*canvas, L, 13.0, 50.0), at (*canvas, L, 13.5, 51.0), at (*canvas, L, 14.0, 50.0), at (*canvas, L, 15.0, 52.0) });
+    CHECK (proc.getPattern().trajectories.size() == 3);
+    proc.undo();
+    CHECK (proc.getPattern() == beforeStroke);
+
+    // 5. Select tool: click the glide, Shift-drag it +1 beat and ~+2.3 semitones -> moves exactly +2 semitones.
+    CHECK (press (juce::KeyPress ('s')));
+    const auto glideBefore = proc.getPattern().trajectories[0];
+    const double grabPitch = glideBefore.pitchAt (3.0);
+    drag (*canvas, { at (*canvas, L, 3.0, grabPitch), at (*canvas, L, 3.5, grabPitch + 1.0), at (*canvas, L, 4.0, grabPitch + 2.3) },
+          juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | juce::ModifierKeys::shiftModifier));
+    {
+        const auto& g = proc.getPattern().trajectories[0];
+        CHECK (std::abs (g.startBeat() - (glideBefore.startBeat() + 1.0)) < 0.02);
+        CHECK (std::abs (g.points[0].pitch - (glideBefore.points[0].pitch + 2.0)) < 1e-9); // whole semitones
+        CHECK (canvas->getSelection() == std::vector<std::uint32_t> { g.id });
+    }
+
+    // 6. Box-select the snapped stroke (beats 10..12 around E4) from empty space, delete it with the Delete key.
+    const auto snappedId = proc.getPattern().trajectories.back().id;
+    {
+        // Done by hand (instead of drag()) so a snapshot can show the selection box mid-drag.
+        const auto start = at (*canvas, L, 9.5, 68.0), end = at (*canvas, L, 12.5, 61.0);
+        canvas->mouseDown (makeEvent (*canvas, start, start, juce::ModifierKeys::leftButtonModifier));
+        canvas->mouseDrag (makeEvent (*canvas, end, start, juce::ModifierKeys::leftButtonModifier));
+        if (argc > 2)
+        {
+            const auto snapshot = editor->createComponentSnapshot (editor->getLocalBounds());
+            juce::FileOutputStream stream (juce::File::getCurrentWorkingDirectory().getChildFile (argv[2]));
+            stream.setPosition (0);
+            stream.truncate();
+            juce::PNGImageFormat().writeImageToStream (snapshot, stream);
+        }
+        canvas->mouseUp (makeEvent (*canvas, end, start, juce::ModifierKeys::leftButtonModifier));
+    }
+    CHECK (canvas->getSelection() == std::vector<std::uint32_t> { snappedId });
+    CHECK (press (juce::KeyPress (juce::KeyPress::deleteKey)));
+    CHECK (proc.getPattern().trajectories.size() == 1 && canvas->getSelection().empty());
+    proc.undo();
+    CHECK (proc.getPattern().trajectories.size() == 2);
+
+    // 7. State round trip: pattern and parameters come back exactly in a fresh instance.
+    proc.params.getParameter ("bendRange")->setValueNotifyingHost (proc.params.getParameter ("bendRange")->convertTo0to1 (24.0f));
+    juce::MemoryBlock state;
+    proc.getStateInformation (state);
+    {
+        PitchPaintProcessor restored;
+        restored.setStateInformation (state.getData(), (int) state.getSize());
+        CHECK (restored.getPattern() == proc.getPattern());
+        CHECK ((int) restored.params.getRawParameterValue ("bendRange")->load() == 24);
+        CHECK (! restored.canUndo());
+        std::printf ("[info] state: %d bytes, %d trajectories\n", (int) state.getSize(), (int) restored.getPattern().trajectories.size());
+    }
+    {
+        PitchPaintProcessor fresh; // new instances start empty
+        CHECK (fresh.getPattern().trajectories.empty());
+        fresh.setStateInformation ("garbage", 7); // malformed state is ignored
+        CHECK (fresh.getPattern().trajectories.empty());
+    }
+
+    // 8. Loop length change is one undo step.
+    {
+        auto changed = proc.getPattern();
+        changed.lengthBeats = 4.0;
+        proc.applyEdit (changed);
+        CHECK (proc.getPattern().lengthBeats == 4.0);
+        proc.undo();
+        CHECK (proc.getPattern().lengthBeats == 16.0);
+    }
 
     proc.setPlayHead (nullptr);
     editor.reset();

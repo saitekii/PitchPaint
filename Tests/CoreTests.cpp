@@ -2,6 +2,7 @@
 #include "Core/MidiRenderer.h"
 #include "Core/PatternSnapshots.h"
 #include "Core/PreviewSynth.h"
+#include "Core/UndoHistory.h"
 
 #include <cmath>
 #include <cstdio>
@@ -124,6 +125,78 @@ void testSnapshots()
     CHECK (held->trajectories.size() == 1);     // still alive while held
     CHECK (snaps.acquire()->trajectories.empty());
     CHECK (held.use_count() == 2);              // retained by the store, so releasing `held` won't free it
+}
+
+void testSerialiseRoundTrip()
+{
+    Pattern p;
+    p.lengthBeats = 12.0;
+    p.trajectories.push_back ({ 3, { { 0.1, 60.123456789012345 }, { 1.0 / 3.0, 61.0 }, { 2.0, 1e-9 } } });
+    p.trajectories.push_back ({ 7, { { 4.0, 127.0 }, { 5.5, 0.0 } } });
+    p.trajectories.push_back ({ 9, {} });
+
+    const auto text = serialise (p);
+    const auto back = parsePattern (text);
+    CHECK (back.has_value() && *back == p); // bit-exact doubles
+
+    CHECK (parsePattern (serialise (Pattern {})) == Pattern {});
+    CHECK (! parsePattern ("").has_value());
+    CHECK (! parsePattern ("PitchPaintPattern 2\nlength 4\n").has_value());
+    CHECK (! parsePattern ("PitchPaintPattern 1\nlength 4\nt 1 0.5\n").has_value());   // beat without pitch
+    CHECK (! parsePattern ("PitchPaintPattern 1\nlength 4\nt 1 0.5 nan\n").has_value());
+    CHECK (! parsePattern ("PitchPaintPattern 1\nlength -1\n").has_value());
+    const auto unsorted = parsePattern ("PitchPaintPattern 1\r\nlength 4\r\nt 2 3 60 1 62\r\n");
+    CHECK (unsorted.has_value() && unsorted->trajectories.size() == 1 && unsorted->trajectories[0].points[0].beat == 1.0);
+}
+
+void testMoveTrajectories()
+{
+    Pattern p;
+    p.lengthBeats = 8.0;
+    p.trajectories.push_back (line (1, 1.0, 60.0, 2.0, 62.0));
+    p.trajectories.push_back (line (2, 3.0, 70.0, 5.0, 70.0));
+    p.trajectories.push_back (line (3, 0.0, 50.0, 1.0, 50.0));
+
+    moveTrajectories (p, { 1, 2 }, 1.5, -2.0);
+    CHECK (p.trajectories[0].startBeat() == 2.5 && p.trajectories[0].points[1].pitch == 60.0);
+    CHECK (p.trajectories[1].endBeat() == 6.5 && p.trajectories[1].points[0].pitch == 68.0);
+    CHECK (p.trajectories[2].startBeat() == 0.0); // unselected untouched
+
+    // Limited so the selection stays inside the loop and the MIDI range, moving as a group.
+    moveTrajectories (p, { 1, 2 }, 10.0, 100.0);
+    CHECK (p.trajectories[1].endBeat() == 8.0);
+    CHECK (p.trajectories[0].startBeat() == 4.0);
+    CHECK (p.trajectories[1].points[0].pitch == 127.0);
+    moveTrajectories (p, { 3 }, -5.0, -60.0);
+    CHECK (p.trajectories[2].startBeat() == 0.0 && p.trajectories[2].points[0].pitch == 0.0);
+}
+
+void testUndoHistory()
+{
+    Pattern a, b, c;
+    b.lengthBeats = 4.0;
+    c.lengthBeats = 8.0;
+
+    UndoHistory h;
+    CHECK (! h.canUndo() && ! h.undo (a).has_value());
+    h.record (a); // a -> b
+    h.record (b); // b -> c
+    auto r = h.undo (c);
+    CHECK (r && *r == b);
+    r = h.undo (b);
+    CHECK (r && *r == a && ! h.canUndo());
+    r = h.redo (a);
+    CHECK (r && *r == b && h.canRedo());
+
+    h.record (b); // new edit from b clears redo
+    CHECK (! h.canRedo());
+
+    for (size_t i = 0; i < UndoHistory::maxSteps + 10; ++i)
+        h.record (a);
+    int steps = 0;
+    Pattern cur;
+    while (auto prev = h.undo (cur)) { cur = *prev; ++steps; }
+    CHECK (steps == (int) UndoHistory::maxSteps);
 }
 
 // Frequency from rising zero crossings (interpolated) within [from, to).
@@ -478,6 +551,9 @@ int main()
         { "pitch interpolation", testPitchInterpolation },
         { "pencil draw segment", testDrawSegment },
         { "pattern snapshots", testSnapshots },
+        { "serialise round trip", testSerialiseRoundTrip },
+        { "move trajectories", testMoveTrajectories },
+        { "undo history", testUndoHistory },
         { "preview synth plays drawn pitch (Hz)", testPreviewSynthPlaysDrawnPitch },
         { "MPE config messages", testMpeConfigMessages },
         { "single note timing and bend", testSingleNoteTimingAndBend },
