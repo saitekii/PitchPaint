@@ -33,7 +33,8 @@ PitchPaintEditor::PitchPaintEditor (PitchPaintProcessor& p)
                              "Right-drag erases with any tool.");
 
     smoothButton.onClick = [this] { canvas.smoothSelection(); };
-    smoothButton.setTooltip ("Smooth the selected strokes (M). Press again for more. Start and end pitches stay.");
+    smoothButton.setTooltip ("Smooth the selected strokes, or all strokes when nothing is selected (M). "
+                             "Press again for more. Start and end pitches stay.");
 
     smoothingSlider.setRange (0.0, 100.0, 1.0);
     smoothingSlider.setTextValueSuffix ("%");
@@ -315,7 +316,7 @@ void PitchPaintEditor::showEditMenu()
     add (remove, "Delete", "Del", hasSelection);
     menu.addSeparator();
     add (selectAll, "Select all", "Ctrl+A", ! processor.getPattern().trajectories.empty());
-    add (smooth, "Smooth", "M", hasSelection);
+    add (smooth, hasSelection ? "Smooth selection" : "Smooth all strokes", "M", ! processor.getPattern().trajectories.empty());
 
     menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&editMenuButton),
                         [safe = juce::Component::SafePointer<PitchPaintEditor> (this)] (int result)
@@ -350,7 +351,9 @@ void PitchPaintEditor::openVibratoPanel()
     const auto heading = selection.empty() ? juce::String ("Vibrato for new strokes")
                                            : "Vibrato for " + juce::String ((int) selection.size())
                                                  + (selection.size() == 1 ? " selected stroke" : " selected strokes");
-    auto panel = std::make_unique<VibratoPanel> (initial, heading);
+    auto panel = std::make_unique<VibratoPanel> (initial,
+                                                 selection.empty() ? VibratoPanel::Target::newStrokes : VibratoPanel::Target::selection,
+                                                 heading);
 
     const auto describe = [] (pitchpaint::Vibrato v)
     {
@@ -370,6 +373,18 @@ void PitchPaintEditor::openVibratoPanel()
         canvas.setSelectionVibrato (v, live);
         if (! live)
             showStatus (describe (v) + " on the selection. Ctrl+Z to undo.");
+    };
+    panel->onApplyToAll = [this, describe] (pitchpaint::Vibrato v)
+    {
+        auto pattern = processor.getPattern();
+        for (auto& t : pattern.trajectories)
+            t.vibrato = v;
+        const auto count = (int) pattern.trajectories.size();
+        processor.applyEdit (std::move (pattern));
+        processor.setNewStrokeVibrato (v);
+        showStatus (describe (v) + " on all " + juce::String (count) + (count == 1 ? " stroke" : " strokes")
+                    + " and new strokes. Ctrl+Z to undo.");
+        canvas.repaint();
     };
     panel->onGestureEnd = [this, describe]
     {
@@ -430,7 +445,7 @@ void PitchPaintEditor::refresh()
         magnetSlider.setValue (juce::roundToInt (tuning.magnet * 100.0), juce::dontSendNotification);
     if (! smoothingSlider.isMouseButtonDown (true))
         smoothingSlider.setValue (processor.getDrawSmoothing(), juce::dontSendNotification);
-    smoothButton.setEnabled (! canvas.getSelection().empty());
+    smoothButton.setEnabled (! processor.getPattern().trajectories.empty()); // selection, or everything
 
     // The velocity field edits the selection when there is one, otherwise the velocity for new strokes.
     const auto& selection = canvas.getSelection();

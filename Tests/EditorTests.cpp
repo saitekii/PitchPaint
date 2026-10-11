@@ -762,6 +762,110 @@ int main (int argc, char** argv)
         juce::SystemClipboard::copyTextToClipboard (savedClipboard);
     }
 
+    // 17. Clear defaults for commands that act on "the selection": Smooth with nothing selected smooths everything;
+    //     the vibrato panel offers "Add vibrato" (selection without vibrato) and "Apply to all strokes" (no selection).
+    {
+        const auto settle = [] { juce::MessageManager::getInstance()->runDispatchLoopUntil (80); };
+        const auto findCallout = [&] () -> juce::CallOutBox*
+        {
+            for (auto* child : editor->getChildren())
+                if (auto* box = dynamic_cast<juce::CallOutBox*> (child))
+                    return box;
+            return nullptr;
+        };
+        const auto buttonIn = [] (juce::Component* parent, const juce::String& text) -> juce::Button*
+        {
+            for (auto* child : parent->getChildren())
+                if (auto* b = dynamic_cast<juce::Button*> (child); b != nullptr && b->getButtonText() == text)
+                    return b;
+            return nullptr;
+        };
+        const auto openVibrato = [&] () -> VibratoPanel*
+        {
+            if (auto* b = buttonIn (editor.get(), "Vibrato..."))
+                b->triggerClick();
+            settle();
+            if (auto* box = findCallout())
+                for (auto* inner : box->getChildren())
+                    if (auto* panel = dynamic_cast<VibratoPanel*> (inner))
+                        return panel;
+            return nullptr;
+        };
+        const auto closeVibrato = [&]
+        {
+            if (auto* box = findCallout())
+                box->dismiss();
+            settle();
+        };
+
+        // Smooth, nothing selected: every stroke changes; the button is enabled.
+        CHECK (press (juce::KeyPress ('s')));
+        canvas->clearSelection();
+        settle();
+        auto* smoothButton = buttonIn (editor.get(), "Smooth");
+        CHECK (smoothButton != nullptr && smoothButton->isEnabled());
+        const auto beforeSmoothAll = proc.getPattern();
+        CHECK (press (juce::KeyPress ('m')));
+        int changed = 0;
+        for (size_t i = 0; i < beforeSmoothAll.trajectories.size(); ++i)
+            changed += proc.getPattern().trajectories[i] == beforeSmoothAll.trajectories[i] ? 0 : 1;
+        CHECK (changed == (int) beforeSmoothAll.trajectories.size());
+        proc.undo();
+        CHECK (proc.getPattern() == beforeSmoothAll);
+
+        // Vibrato, one stroke selected without vibrato: "Add vibrato" gives it a natural vibrato in one click.
+        const auto target = proc.getPattern().trajectories.front();
+        CHECK (! target.vibrato.isOn());
+        canvas->clearSelection();
+        drag (*canvas, { at (*canvas, L, target.startBeat() + 0.01, target.pitchAt (target.startBeat() + 0.01)) });
+        settle();
+        CHECK (canvas->getSelection() == std::vector<std::uint32_t> { target.id });
+        if (auto* panel = openVibrato())
+        {
+            saveSnapshot (10);
+            auto* add = buttonIn (panel, "Add vibrato");
+            CHECK (add != nullptr && add->isVisible());
+            if (add != nullptr)
+                add->triggerClick(); // delivered asynchronously
+            settle();
+            CHECK (proc.getPattern().trajectories.front().vibrato.depthCents == VibratoPanel::suggestedDepthCents);
+            CHECK (add != nullptr && ! add->isVisible()); // done: the hint now says changes apply right away
+            closeVibrato();
+            proc.undo();
+            CHECK (! proc.getPattern().trajectories.front().vibrato.isOn());
+        }
+        else
+        {
+            CHECK (false); // panel didn't open
+        }
+
+        // Vibrato, nothing selected: "Apply to all strokes" sets every stroke (one undo step) and new strokes.
+        canvas->clearSelection();
+        settle();
+        if (auto* panel = openVibrato())
+        {
+            saveSnapshot (11);
+            const auto beforeAll = proc.getPattern();
+            auto* applyAll = buttonIn (panel, "Apply to all strokes");
+            CHECK (applyAll != nullptr);
+            if (applyAll != nullptr)
+                applyAll->triggerClick();
+            settle();
+            bool allOn = ! proc.getPattern().trajectories.empty();
+            for (const auto& t : proc.getPattern().trajectories)
+                allOn = allOn && t.vibrato.isOn();
+            CHECK (allOn && proc.getNewStrokeVibrato().isOn());
+            closeVibrato();
+            proc.undo();
+            CHECK (proc.getPattern() == beforeAll);
+            proc.setNewStrokeVibrato ({});
+        }
+        else
+        {
+            CHECK (false);
+        }
+    }
+
     // 12. Narrow window: the toolbar wraps instead of overlapping, everything stays inside, the canvas keeps space.
     {
         editor->setSize (560, 480); // the minimum size

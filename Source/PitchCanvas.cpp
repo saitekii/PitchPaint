@@ -923,14 +923,20 @@ void PitchCanvas::insert (const std::vector<pitchpaint::Trajectory>& strokesToAd
 
 void PitchCanvas::smoothSelection()
 {
-    if (selection.empty())
-        return;
+    // Like quantize in most DAWs: the selection if there is one, otherwise everything.
     auto pattern = processor.getPattern();
+    if (pattern.trajectories.empty())
+    {
+        report ("Nothing to smooth yet: draw a stroke first.");
+        return;
+    }
+    const bool all = selection.empty();
     for (auto& t : pattern.trajectories)
-        if (isSelected (t.id))
+        if (all || isSelected (t.id))
             pitchpaint::smoothTrajectory (t, 1.0 / 32.0);
+    const auto count = all ? (int) pattern.trajectories.size() : (int) selection.size();
     processor.applyEdit (std::move (pattern));
-    report ("Smoothed " + strokes ((int) selection.size()) + ". Press again for more; Ctrl+Z to undo.");
+    report ("Smoothed " + juce::String (all ? "all " : "") + strokes (count) + ". Press again for more; Ctrl+Z to undo.");
     repaint();
 }
 
