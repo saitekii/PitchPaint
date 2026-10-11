@@ -30,6 +30,14 @@ public:
     void deleteSelection();
     void nudgeSelection (double deltaBeats, double deltaPitch); // keyboard moves, one undo step each
     void smoothSelection();                                      // one more step of smoothing, one undo step
+    void setSelectionVibrato (pitchpaint::Vibrato, bool live);   // live: no undo step (caller wraps a gesture)
+
+    // Clipboard (system clipboard, so it works across PitchPaint instances). Each edit is one undo step.
+    bool copySelection();
+    void cutSelection();
+    void paste();              // at the mouse if over the canvas, else at the original time
+    void duplicateSelection(); // right after the selection
+    static bool clipboardHasStrokes();
 
     // Line tool: clicks add points; finish with double-click, Enter or right-click; Esc cancels.
     bool isDrawingLine() const { return lineId != 0; }
@@ -79,6 +87,7 @@ private:
     std::vector<juce::Point<float>> screenPoints (const pitchpaint::Trajectory&) const; // as heard (magnet applied)
     pitchpaint::PitchPoint linePointAt (juce::Point<float>, const juce::ModifierKeys&) const;
     void lineClick (const juce::MouseEvent&);
+    void insert (const std::vector<pitchpaint::Trajectory>&, double deltaBeats, const juce::String& verb);
     bool sweepHits (const pitchpaint::Trajectory&, juce::Line<float> swept, float radius) const;
     std::uint32_t trajectoryAt (juce::Point<float>) const; // 0 if none
     bool isSelected (std::uint32_t id) const;

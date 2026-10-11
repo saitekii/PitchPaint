@@ -653,9 +653,118 @@ int main (int argc, char** argv)
         CHECK (proc.getPattern() == beforeSmooth);
     }
 
+    // 16. Copy / cut / paste / duplicate (system clipboard; the user's clipboard is restored afterwards), and the
+    //     vibrato panel.
+    {
+        const auto savedClipboard = juce::SystemClipboard::getTextFromClipboard();
+        const auto settle = [] { juce::MessageManager::getInstance()->runDispatchLoopUntil (80); };
+        const auto byId = [&] (std::uint32_t id) -> const pitchpaint::Trajectory*
+        {
+            for (const auto& t : proc.getPattern().trajectories)
+                if (t.id == id)
+                    return &t;
+            return nullptr;
+        };
+
+        // A one-beat note at beat 1 on a 1/4 grid; select it.
+        proc.setGridIndex (3);
+        proc.setDrawSmoothing (0);
+        CHECK (press (juce::KeyPress ('p')));
+        drag (*canvas, { at (*canvas, L, 1.0, 86.0), at (*canvas, L, 2.0, 86.0) });
+        const auto original = proc.getPattern().trajectories.back();
+        CHECK (press (juce::KeyPress ('s')));
+        canvas->clearSelection();
+        drag (*canvas, { at (*canvas, L, 1.5, 86.0) });
+        CHECK (canvas->getSelection() == std::vector<std::uint32_t> { original.id });
+
+        // Copy, then paste with the mouse over beat 5.2: lands on the grid at beat 5, becomes the selection.
+        CHECK (press (ctrl ('c')));
+        CHECK (juce::SystemClipboard::getTextFromClipboard().startsWith ("PitchPaintPattern"));
+        const auto hover = at (*canvas, L, 5.2, 60.0);
+        canvas->mouseMove (makeEvent (*canvas, hover, hover, {}));
+        const auto beforePaste = proc.getPattern();
+        CHECK (press (ctrl ('v')));
+        CHECK (proc.getPattern().trajectories.size() == beforePaste.trajectories.size() + 1);
+        const auto pasted = proc.getPattern().trajectories.back();
+        std::printf ("[info] pasted %u at %.4f..%.4f pitch %.4f (original pitch %.4f)\n", pasted.id, pasted.startBeat(),
+                     pasted.endBeat(), pasted.pitchAt (5.5), original.pitchAt (1.5));
+        CHECK (pasted.id != original.id && pasted.startBeat() == 5.0 && pasted.endBeat() == 6.0
+               && pasted.pitchAt (5.5) == original.pitchAt (1.5)); // same shape, moved in time only
+        CHECK (canvas->getSelection() == std::vector<std::uint32_t> { pasted.id });
+        proc.undo();
+        CHECK (proc.getPattern() == beforePaste);
+
+        // Duplicate: right after the selection (one beat later).
+        canvas->clearSelection();
+        drag (*canvas, { at (*canvas, L, 1.5, 86.0) });
+        CHECK (press (ctrl ('d')));
+        const auto duplicate = proc.getPattern().trajectories.back();
+        CHECK (duplicate.startBeat() == 2.0 && duplicate.endBeat() == 3.0 && duplicate.velocity == original.velocity);
+        proc.undo();
+
+        // Cut removes it (one undo step) and pastes back where it was when the mouse isn't over the canvas.
+        canvas->clearSelection();
+        drag (*canvas, { at (*canvas, L, 1.5, 86.0) });
+        CHECK (press (ctrl ('x')));
+        CHECK (byId (original.id) == nullptr);
+        canvas->mouseExit (makeEvent (*canvas, hover, hover, {}));
+        CHECK (press (ctrl ('v')));
+        CHECK (proc.getPattern().trajectories.back().startBeat() == 1.0);
+        proc.undo();
+        proc.undo();
+        CHECK (byId (original.id) != nullptr);
+
+        // Vibrato panel on the selected stroke: depth 50 cents (typed: one undo step).
+        canvas->clearSelection();
+        drag (*canvas, { at (*canvas, L, 1.5, 86.0) });
+        settle();
+        juce::TextButton* vibratoButton = nullptr;
+        for (auto* child : editor->getChildren())
+            if (auto* b = dynamic_cast<juce::TextButton*> (child); b != nullptr && b->getButtonText().startsWith ("Vibrato"))
+                vibratoButton = b;
+        CHECK (vibratoButton != nullptr);
+        if (vibratoButton != nullptr)
+        {
+            vibratoButton->triggerClick();
+            settle();
+            VibratoPanel* panel = nullptr;
+            juce::CallOutBox* callout = nullptr;
+            for (auto* child : editor->getChildren())
+                if (auto* box = dynamic_cast<juce::CallOutBox*> (child))
+                {
+                    callout = box;
+                    for (auto* inner : box->getChildren())
+                        if (auto* found = dynamic_cast<VibratoPanel*> (inner))
+                            panel = found;
+                }
+            CHECK (panel != nullptr);
+            if (panel != nullptr)
+            {
+                juce::Slider* depth = nullptr;
+                for (auto* child : panel->getChildren())
+                    if (auto* sl = dynamic_cast<juce::Slider*> (child); sl != nullptr && sl->getTitle() == "Vibrato depth")
+                        depth = sl;
+                CHECK (depth != nullptr);
+                const auto beforeVibrato = proc.getPattern();
+                if (depth != nullptr)
+                    depth->setValue (50.0, juce::sendNotificationSync);
+                const auto* withVibrato = byId (original.id);
+                CHECK (withVibrato != nullptr && withVibrato->vibrato.depthCents == 50.0);
+                saveSnapshot (9);
+                proc.undo();
+                CHECK (proc.getPattern() == beforeVibrato);
+            }
+            if (callout != nullptr)
+                callout->dismiss();
+            settle();
+        }
+
+        juce::SystemClipboard::copyTextToClipboard (savedClipboard);
+    }
+
     // 12. Narrow window: the toolbar wraps instead of overlapping, everything stays inside, the canvas keeps space.
     {
-        editor->setSize (560, 460); // the minimum size
+        editor->setSize (560, 480); // the minimum size
         juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
         std::vector<juce::Rectangle<int>> boxes;
         for (auto* child : editor->getChildren())

@@ -206,7 +206,7 @@ void MidiRenderer::syncMono (const Pattern& pattern, double beat, int sample, Mi
 
 void MidiRenderer::startVoice (Voice& v, int channel, const Trajectory& t, double beat, int sample, MidiOut& out)
 {
-    const double pitch = tuning.apply (t.pitchAt (beat)); // with the pitch magnet
+    const double pitch = soundingPitch (t, tuning, beat, beatsPerSecond); // magnet, then vibrato
 
     // The note number is the semitone nearest to where the curve starts, so the attack is in tune and the note
     // shown by the host/synth matches the drawing even if the synth applies a different bend range than ours.
@@ -223,7 +223,7 @@ void MidiRenderer::startVoice (Voice& v, int channel, const Trajectory& t, doubl
 
 void MidiRenderer::updateVoice (Voice& v, int channel, const Trajectory& t, double beat, int sample, MidiOut& out)
 {
-    const double pitch = tuning.apply (t.pitchAt (beat)); // with the pitch magnet
+    const double pitch = soundingPitch (t, tuning, beat, beatsPerSecond); // magnet, then vibrato
     const double offset = pitch - v.note;
 
     if (std::abs (offset) > settings.bendRange)

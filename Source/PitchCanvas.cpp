@@ -319,7 +319,9 @@ void PitchCanvas::paintTrajectories (juce::Graphics& g, const pitchpaint::Patter
         if (selected)
         {
             // Velocity value next to the start of each selected stroke.
-            const auto text = "vel " + juce::String (t.velocity);
+            auto text = "vel " + juce::String (t.velocity);
+            if (t.vibrato.isOn())
+                text << "  vib " << juce::roundToInt (t.vibrato.depthCents) << " ct";
             const juce::Font font (theme::type::caption());
             const auto start = pts[0];
             const float chipWidth = juce::GlyphArrangement::getStringWidth (font, text) + 2.0f * theme::space::xs;
@@ -359,7 +361,7 @@ void PitchCanvas::paintPlayhead (juce::Graphics& g, const pitchpaint::Pattern& p
         if (! t.isPlayable() || beat < t.startBeat() || beat >= t.endBeat())
             continue;
 
-        const juce::Point<float> p { x, pitchToY (pattern.tuning.apply (t.pitchAt (beat))) };
+        const juce::Point<float> p { x, pitchToY (pitchpaint::soundingPitch (t, pattern.tuning, beat, processor.getBeatsPerSecond())) };
         g.setColour (colour::forStroke (t.id));
         g.fillEllipse (juce::Rectangle<float> (10.0f, 10.0f).withCentre (p));
         g.setColour (colour::playhead);
@@ -420,25 +422,24 @@ std::vector<juce::Line<float>> PitchCanvas::segmentsOf (const pitchpaint::Trajec
 
 std::vector<juce::Point<float>> PitchCanvas::screenPoints (const pitchpaint::Trajectory& t) const
 {
-    // Points as heard: the pitch magnet bends even straight segments, so sample those every few pixels.
+    // Points as heard: the pitch magnet and vibrato bend even straight segments, so sample those every few pixels.
     const auto& tuning = processor.getPattern().tuning;
-    const auto at = [&] (double beat, double pitch) { return juce::Point<float> { beatToX (beat), pitchToY (tuning.apply (pitch)) }; };
+    const double bps = processor.getBeatsPerSecond();
+    const auto at = [&] (double beat) { return juce::Point<float> { beatToX (beat), pitchToY (pitchpaint::soundingPitch (t, tuning, beat, bps)) }; };
+    const float pxStep = t.vibrato.isOn() ? 2.0f : (tuning.magnet > 0.0 ? 3.0f : 0.0f);
 
     std::vector<juce::Point<float>> pts;
     for (size_t i = 0; i < t.points.size(); ++i)
     {
         const auto& b = t.points[i];
-        if (i > 0 && tuning.magnet > 0.0)
+        if (i > 0 && pxStep > 0.0f)
         {
             const auto& a = t.points[i - 1];
-            const int n = juce::jlimit (1, 512, (int) (std::abs (beatToX (b.beat) - beatToX (a.beat)) / 3.0f));
+            const int n = juce::jlimit (1, 2048, (int) (std::abs (beatToX (b.beat) - beatToX (a.beat)) / pxStep));
             for (int k = 1; k < n; ++k)
-            {
-                const double f = (double) k / n;
-                pts.push_back (at (a.beat + (b.beat - a.beat) * f, a.pitch + (b.pitch - a.pitch) * f));
-            }
+                pts.push_back (at (a.beat + (b.beat - a.beat) * (double) k / n));
         }
-        pts.push_back (at (b.beat, b.pitch));
+        pts.push_back (at (b.beat));
     }
     return pts;
 }
@@ -563,7 +564,7 @@ void PitchCanvas::mouseDown (const juce::MouseEvent& e)
     if (const double grid = gridStep (e.mods); grid > 0.0)
         lastPoint.beat = juce::jlimit (0.0, processor.getPattern().lengthBeats, pitchpaint::snapBeat (lastPoint.beat, grid));
     drawingId = pattern.nextId();
-    pattern.trajectories.push_back ({ drawingId, { lastPoint }, processor.getNewStrokeVelocity() });
+    pattern.trajectories.push_back ({ drawingId, { lastPoint }, processor.getNewStrokeVelocity(), processor.getNewStrokeVibrato() });
     processor.setPattern (std::move (pattern));
     repaint();
 }
@@ -764,7 +765,7 @@ void PitchCanvas::lineClick (const juce::MouseEvent& e)
     {
         processor.beginGesture(); // the whole line is one undo step
         lineId = pattern.nextId();
-        pattern.trajectories.push_back ({ lineId, { pt }, processor.getNewStrokeVelocity() });
+        pattern.trajectories.push_back ({ lineId, { pt }, processor.getNewStrokeVelocity(), processor.getNewStrokeVibrato() });
         processor.setPattern (std::move (pattern));
         repaint();
         return;
@@ -818,6 +819,105 @@ void PitchCanvas::setTool (Tool t)
     if (t != Tool::line)
         finishLine();
     tool = t;
+    repaint();
+}
+
+void PitchCanvas::setSelectionVibrato (pitchpaint::Vibrato vibrato, bool live)
+{
+    if (selection.empty())
+        return;
+    auto pattern = processor.getPattern();
+    for (auto& t : pattern.trajectories)
+        if (isSelected (t.id))
+            t.vibrato = vibrato;
+    if (live)
+        processor.setPattern (std::move (pattern)); // inside a gesture: the caller records one undo step
+    else
+        processor.applyEdit (std::move (pattern));
+    repaint();
+}
+
+//==============================================================================
+// Clipboard: strokes go to the system clipboard as PitchPaint pattern text, so they paste across instances too.
+bool PitchCanvas::copySelection()
+{
+    if (selection.empty())
+        return false;
+    juce::SystemClipboard::copyTextToClipboard (pitchpaint::serialise (pitchpaint::extractStrokes (processor.getPattern(), selection)));
+    report ("Copied " + strokes ((int) selection.size()) + ".");
+    return true;
+}
+
+void PitchCanvas::cutSelection()
+{
+    if (! copySelection())
+        return;
+    const auto count = (int) selection.size();
+    auto pattern = processor.getPattern();
+    std::erase_if (pattern.trajectories, [this] (const auto& t) { return isSelected (t.id); });
+    selection.clear();
+    processor.applyEdit (std::move (pattern));
+    report ("Cut " + strokes (count) + ". Ctrl+Z to undo.");
+    repaint();
+}
+
+bool PitchCanvas::clipboardHasStrokes()
+{
+    const auto parsed = pitchpaint::parsePattern (juce::SystemClipboard::getTextFromClipboard().toStdString());
+    return parsed.has_value() && ! parsed->trajectories.empty();
+}
+
+void PitchCanvas::paste()
+{
+    const auto parsed = pitchpaint::parsePattern (juce::SystemClipboard::getTextFromClipboard().toStdString());
+    if (! parsed.has_value() || parsed->trajectories.empty())
+    {
+        report ("Nothing to paste: copy some strokes first.");
+        return;
+    }
+
+    // At the mouse if it's over the canvas (start on the grid), otherwise where the strokes were.
+    double start = std::numeric_limits<double>::max();
+    for (const auto& t : parsed->trajectories)
+        if (! t.points.empty())
+            start = std::min (start, t.startBeat());
+    double delta = 0.0;
+    if (hoverPos && plotArea().contains (*hoverPos))
+    {
+        double target = juce::jlimit (0.0, processor.getPattern().lengthBeats, xToBeat (hoverPos->x));
+        if (const double grid = processor.getGridBeats(); grid > 0.0)
+            target = pitchpaint::snapBeat (target, grid);
+        delta = target - start;
+    }
+    insert (parsed->trajectories, delta, "Pasted ");
+}
+
+void PitchCanvas::duplicateSelection()
+{
+    if (selection.empty())
+        return;
+    const auto copied = pitchpaint::extractStrokes (processor.getPattern(), selection);
+    double start = std::numeric_limits<double>::max(), end = std::numeric_limits<double>::lowest();
+    for (const auto& t : copied.trajectories)
+        if (! t.points.empty())
+        {
+            start = std::min (start, t.startBeat());
+            end = std::max (end, t.endBeat());
+        }
+    // Right after the selection; with snapping, by a whole number of grid steps so the copy stays on the grid.
+    double span = end - start;
+    if (const double grid = processor.getGridBeats(); grid > 0.0)
+        span = std::ceil (span / grid - 1.0e-9) * grid;
+    insert (copied.trajectories, span, "Duplicated ");
+}
+
+void PitchCanvas::insert (const std::vector<pitchpaint::Trajectory>& strokesToAdd, double deltaBeats, const juce::String& verb)
+{
+    auto pattern = processor.getPattern();
+    const auto ids = pitchpaint::insertStrokes (pattern, strokesToAdd, deltaBeats);
+    processor.applyEdit (std::move (pattern));
+    selection = ids; // ready to move with the mouse or arrow keys
+    report (verb + strokes ((int) ids.size()) + ". Ctrl+Z to undo.");
     repaint();
 }
 

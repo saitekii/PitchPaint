@@ -141,7 +141,7 @@ void testSerialiseRoundTrip()
 
     CHECK (parsePattern (serialise (Pattern {})) == Pattern {});
     CHECK (! parsePattern ("").has_value());
-    CHECK (! parsePattern ("PitchPaintPattern 4\nlength 4\n").has_value());              // unknown future version
+    CHECK (! parsePattern ("PitchPaintPattern 5\nlength 4\n").has_value());              // unknown future version
 
     // Tuning round-trips; a malformed tuning line is rejected; version 2 (no tuning) loads with the default.
     Pattern tuned = p;
@@ -367,6 +367,96 @@ void testSmoothing()
     CHECK (glide.points.front().pitch == 60.0 && glide.points.back().pitch == 67.0);
     for (size_t i = 1; i < glide.points.size(); ++i)
         CHECK (glide.points[i].pitch >= glide.points[i - 1].pitch);
+}
+
+void testVibrato()
+{
+    Trajectory t = line (1, 0.0, 60.0, 8.0, 60.0);
+    t.vibrato = { 50.0, 5.0, 1.0 }; // +-50 cents at 5 Hz, fading in over a beat
+    const Tuning noMagnet;
+    const double bps = 2.0;           // 120 BPM
+
+    // Starts at the drawn pitch (fade-in), then swings +-0.5 semitones.
+    CHECK (std::abs (soundingPitch (t, noMagnet, 0.0, bps) - 60.0) < 1e-12);
+    double lo = 1e9, hi = -1e9;
+    int crossings = 0;
+    double previous = soundingPitch (t, noMagnet, 2.05, bps) - 60.0;
+    for (double beat = 2.05; beat < 4.05; beat += 0.0005) // one second after the fade (not starting on a crossing)
+    {
+        const double d = soundingPitch (t, noMagnet, beat, bps) - 60.0;
+        lo = std::min (lo, d);
+        hi = std::max (hi, d);
+        crossings += (previous < 0.0 && d >= 0.0) ? 1 : 0;
+        previous = d;
+    }
+    CHECK (std::abs (hi - 0.5) < 0.01 && std::abs (lo + 0.5) < 0.01);
+    CHECK (crossings == 5); // 5 Hz over one second
+    // Rate is in Hz, so at 60 BPM the same second spans one beat.
+    int slowCrossings = 0;
+    previous = soundingPitch (t, noMagnet, 2.05, 1.0) - 60.0;
+    for (double beat = 2.05; beat < 3.05; beat += 0.0005)
+    {
+        const double d = soundingPitch (t, noMagnet, beat, 1.0) - 60.0;
+        slowCrossings += (previous < 0.0 && d >= 0.0) ? 1 : 0;
+        previous = d;
+    }
+    CHECK (slowCrossings == 5);
+
+    // Vibrato comes after the magnet: a full magnet doesn't flatten it.
+    const Tuning fullMagnet { 0, 0, 1.0 };
+    double magnetHi = -1e9;
+    for (double beat = 2.0; beat < 3.0; beat += 0.001)
+        magnetHi = std::max (magnetHi, soundingPitch (t, fullMagnet, beat, bps) - 60.0);
+    CHECK (std::abs (magnetHi - 0.5) < 0.01);
+
+    // The renderer sends it as pitch bend.
+    Pattern p;
+    p.lengthBeats = 8.0;
+    p.trajectories.push_back (t);
+    MidiRenderer r;
+    MidiOut setup;
+    r.configure ({ OutputMode::mpe, 48 }, setup, 0);
+    double bendHi = -1e9;
+    for (const auto& a : renderAll (r, p, beatToSample (4.0), 512))
+        if (isBend (a.event))
+            bendHi = std::max (bendHi, pitchFromBend (bendOf (a.event), 60, 48) - 60.0);
+    CHECK (std::abs (bendHi - 0.5) < 0.02);
+
+    // Saved and loaded; kept by cuts; version 3 loads without vibrato.
+    CHECK (parsePattern (serialise (p)) == p);
+    cutTrajectory (p, 1, 3.0, 4.0);
+    CHECK (p.trajectories.size() == 2 && p.trajectories[0].vibrato == t.vibrato && p.trajectories[1].vibrato == t.vibrato);
+    const auto v3 = parsePattern ("PitchPaintPattern 3\nlength 4\ntuning 0 0 0\nt 1 v 100 0 60 1 60\n");
+    CHECK (v3.has_value() && ! v3->trajectories[0].vibrato.isOn());
+}
+
+void testClipboard()
+{
+    Pattern p;
+    p.lengthBeats = 8.0;
+    p.trajectories.push_back ({ 1, { { 0.0, 60.0 }, { 1.0, 62.0 } }, 70 });
+    p.trajectories.push_back ({ 4, { { 2.0, 64.0 }, { 3.0, 64.0 } }, 90 });
+    p.trajectories.push_back ({ 7, { { 5.0, 50.0 }, { 6.0, 50.0 } } });
+
+    // Copy two strokes; serialise/parse like the system clipboard would.
+    const auto copied = parsePattern (serialise (extractStrokes (p, { 1, 4 })));
+    CHECK (copied.has_value() && copied->trajectories.size() == 2);
+    if (! copied.has_value())
+        return;
+
+    // Paste 4 beats later: new ids, shifted, everything else (velocity, shape) kept.
+    const auto ids = insertStrokes (p, copied->trajectories, 4.0);
+    CHECK (ids == std::vector<std::uint32_t> ({ 8, 9 }));
+    CHECK (p.trajectories.size() == 5);
+    CHECK (p.trajectories[3].startBeat() == 4.0 && p.trajectories[3].velocity == 70 && p.trajectories[3].pitchAt (4.5) == 61.0);
+    CHECK (p.trajectories[4].startBeat() == 6.0 && p.trajectories[4].velocity == 90);
+
+    // Pasting past the loop end pulls the group back in as a whole (shapes and spacing kept).
+    const auto late = insertStrokes (p, copied->trajectories, 7.0);
+    CHECK (late.size() == 2);
+    const auto& a = p.trajectories[5];
+    const auto& b = p.trajectories[6];
+    CHECK (b.endBeat() == 8.0 && a.startBeat() == 5.0 && b.startBeat() - a.startBeat() == 2.0);
 }
 
 void testTimeGrid()
@@ -782,6 +872,8 @@ int main()
         { "velocity per stroke", testVelocity },
         { "key, scale and pitch magnet", testTuning },
         { "smoothing", testSmoothing },
+        { "vibrato", testVibrato },
+        { "copy / paste", testClipboard },
         { "undo history", testUndoHistory },
         { "preview synth plays drawn pitch (Hz)", testPreviewSynthPlaysDrawnPitch },
         { "MPE config messages", testMpeConfigMessages },

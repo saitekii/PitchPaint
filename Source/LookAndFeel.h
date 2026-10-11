@@ -21,6 +21,7 @@ public:
     void positionComboBoxText (juce::ComboBox&, juce::Label&) override;
 
     juce::Font getPopupMenuFont() override;
+    void drawCallOutBoxBackground (juce::CallOutBox&, juce::Graphics&, const juce::Path&, juce::Image&) override;
 
     // Keyboard focus ring, used by the components above and by the canvas.
     static void drawFocusRing (juce::Graphics&, juce::Rectangle<float> bounds);

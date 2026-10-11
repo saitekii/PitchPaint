@@ -37,6 +37,10 @@ PitchPaintLookAndFeel::PitchPaintLookAndFeel()
     setColour (juce::Slider::textBoxOutlineColourId, colour::borderControl);
     setColour (juce::Slider::textBoxHighlightColourId, colour::accent.withAlpha (0.4f));
 
+    setColour (juce::Slider::trackColourId, colour::accent);
+    setColour (juce::Slider::backgroundColourId, colour::control);
+    setColour (juce::Slider::thumbColourId, colour::textPrimary);
+
     setColour (juce::TextEditor::backgroundColourId, colour::control);
     setColour (juce::TextEditor::textColourId, colour::textPrimary);
     setColour (juce::TextEditor::highlightColourId, colour::accent.withAlpha (0.4f));
@@ -124,6 +128,14 @@ void PitchPaintLookAndFeel::positionComboBoxText (juce::ComboBox& box, juce::Lab
 {
     label.setBounds (space::s, 1, box.getWidth() - space::s - 24, box.getHeight() - 2);
     label.setFont (getComboBoxFont (box));
+}
+
+void PitchPaintLookAndFeel::drawCallOutBoxBackground (juce::CallOutBox&, juce::Graphics& g, const juce::Path& path, juce::Image&)
+{
+    g.setColour (colour::elevated);
+    g.fillPath (path);
+    g.setColour (colour::border);
+    g.strokePath (path, juce::PathStrokeType (1.0f));
 }
 
 juce::Font PitchPaintLookAndFeel::getPopupMenuFont()

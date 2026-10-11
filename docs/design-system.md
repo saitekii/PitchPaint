@@ -11,7 +11,7 @@ All visual values live in [`Source/Theme.h`](../Source/Theme.h). All controls us
 |---|---|---|
 | Canvas | `canvas` | Drawing area |
 | Surface | `surface` | Toolbar, footer, note-name gutter |
-| Elevated | `elevated` | Popup menus, tooltips |
+| Elevated | `elevated` | Popup menus, tooltips, the vibrato call-out |
 | Control | `control`, `controlHover`, `controlPressed` | Button and field fills by state |
 | Text | `textPrimary`, `textSecondary`, `textOnAccent` | Content, supporting text, text on accent |
 | Border | `border`, `borderControl` | Separators; control outlines |
@@ -33,10 +33,11 @@ label is bold.
 
 ## Layout
 
-- **Toolbar:** groups in reading order: Tools (Pencil, Line, Select, Eraser) | Edit (Undo, Redo, Smooth) | Smoothing |
+- **Toolbar:** groups in reading order: Tools (Pencil, Line, Select, Eraser) | Edit (Undo, Redo, Edit menu) |
+  Shape (Smooth, Vibrato...) | Smoothing |
   Loop + Snap | Key + Scale + Magnet | Velocity | Output + Bend range | Preview. Groups wrap onto
   another row when the window is narrow and never overlap. The default window is 1300 × 640, where everything
-  fits in two rows; the minimum is 560 × 460, which keeps the canvas at least ~220 px tall.
+  fits in two rows; the minimum is 560 × 480, which keeps the canvas at least ~200 px tall.
 - **Canvas:** fills the remaining space. Time zoom/scroll: Ctrl+wheel and Shift+wheel. Pitch zoom/scroll: Alt+wheel and the wheel.
 - **Footer:**
   - Left: the persistent synth-setup line, which is never truncated and moves to its own row if needed.
@@ -52,6 +53,11 @@ label is bold.
 | Canvas | Empty state; transport chip ("Stopped - press Play in your DAW" / "Playing", with a square or triangle icon); focus ring when focused from the keyboard |
 | Strokes | Line thickness shows velocity (1–4 px); selected: white outline, slightly thicker, and a "vel N" tag; eraser circle under the mouse |
 | Velocity field | Edits new-stroke velocity, or the selection's (label reads *Selected velocity* in the accent colour). A drag or a ± press is one undo step. |
+
+## Progressive disclosure
+
+- Clipboard commands live in the **Edit** menu, which shows each shortcut, so the toolbar stays short.
+- Vibrato settings open in a call-out from **Vibrato...** instead of taking three toolbar fields.
 
 ## Feedback
 

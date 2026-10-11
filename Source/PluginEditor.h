@@ -3,6 +3,7 @@
 #include "LookAndFeel.h"
 #include "PitchCanvas.h"
 #include "PluginProcessor.h"
+#include "VibratoPanel.h"
 
 class PitchPaintEditor final : public juce::AudioProcessorEditor, private juce::Timer
 {
@@ -29,6 +30,8 @@ private:
     void setLoopBars (int bars);
     void setGrid (int index);
     void velocityChanged();
+    void showEditMenu();
+    void openVibratoPanel();
     void setTuning (pitchpaint::Tuning, bool live);
     juce::String tuningDescription() const;
     void velocityGestureEnded();
@@ -45,6 +48,7 @@ private:
 
     juce::TextButton pencilButton { "Pencil" }, lineButton { "Line" }, selectButton { "Select" }, eraserButton { "Eraser" };
     juce::TextButton undoButton { "Undo" }, redoButton { "Redo" }, smoothButton { "Smooth" };
+    juce::TextButton editMenuButton, vibratoButton { "Vibrato..." };
     juce::Label smoothingLabel { {}, "Smoothing" };
     juce::Slider smoothingSlider { juce::Slider::IncDecButtons, juce::Slider::TextBoxLeft };
     juce::Label keyLabel { {}, "Key" }, scaleLabel { {}, "Scale" }, magnetLabel { {}, "Magnet" };

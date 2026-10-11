@@ -38,7 +38,8 @@ local function make(name, mode, range, preview)
   reaper.GetSetProjectInfo(0, "RENDER_SRATE", 48000, true)
   reaper.GetSetProjectInfo(0, "RENDER_CHANNELS", channels, true)
   reaper.Main_SaveProjectEx(0, dir .. "/" .. name .. ".rpp", 0)
-  reaper.Main_OnCommand(40860, 0) -- close project tab
+  -- The tab stays open: closing it can ask "save changes?" because REAPER records the parameter edits above a moment
+  -- later. run.ps1 ends this REAPER instance once the log is written, so open tabs never prompt.
   return pp >= 0 and mon >= 0 and loaded
 end
 

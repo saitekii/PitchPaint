@@ -14,6 +14,8 @@ and the plugin drives an **external synthesizer** over MIDI using MPE or pitch b
 - **Drawing aids:** pencil smoothing against hand jitter, a Line tool for clean held notes and glides, a Smooth
   command, and a **pitch magnet** that pulls toward the notes of a chosen key and scale while keeping glides smooth.
 - Zoom and scroll in time and pitch.
+- **Vibrato per stroke** (depth, rate in Hz, fade-in), added on top of the drawing so it can be changed or removed later.
+- **Copy, cut, paste, duplicate** via the system clipboard, so strokes also paste between PitchPaint instances.
 - **Velocity per stroke**: set it for new strokes, or select strokes and change theirs; line thickness shows it.
 - **Snap to a time grid** (1 bar … 1/32, triplets): note starts, lengths, moves and eraser cuts land on the grid, while pitch stays free.
 - Any number of overlapping strokes: up to 15 sounding at once in MPE mode.
@@ -57,6 +59,8 @@ The plugin ends up in `build/PitchPaint_artefacts/Release/VST3/PitchPaint.vst3`.
 | Erase | Eraser (E), or right-drag with any tool: cuts out the part of a stroke it passes over (a cut in the middle leaves two strokes). Hold Shift to delete whole strokes. |
 | Select / move | Select (S): click, Shift-click, or drag a box. Drag a selected stroke to move; Shift moves by whole semitones. |
 | Delete selection | Delete or Backspace |
+| Copy / cut / paste / duplicate | Ctrl+C / Ctrl+X / Ctrl+V / Ctrl+D, or the **Edit** menu. Paste goes to the mouse position (on the grid) when the mouse is over the canvas, otherwise to the original time; duplicate goes right after the selection. Pasted strokes are selected, ready to move. |
+| Vibrato | **Vibrato...**: depth (cents), rate (Hz) and fade-in (beats) for the selected strokes, or for new strokes when nothing is selected. Applied after the pitch magnet, so the magnet never flattens it. |
 | Undo / redo | Ctrl+Z / Ctrl+Y (or Ctrl+Shift+Z), or the toolbar buttons |
 | Select all / deselect | Ctrl+A / Esc |
 | Velocity | **Velocity** field: with nothing selected it sets the velocity of new strokes; with strokes selected (label turns to *Selected velocity*) it changes theirs. Thicker line = higher velocity; selected strokes show their value. |

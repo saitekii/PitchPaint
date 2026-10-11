@@ -59,6 +59,49 @@ double snapBeat (double beat, double step)
     return step > 0.0 ? std::round (beat / step) * step : beat;
 }
 
+double soundingPitch (const Trajectory& t, const Tuning& tuning, double beat, double beatsPerSecond)
+{
+    double pitch = tuning.apply (t.pitchAt (beat));
+    if (t.vibrato.isOn() && ! t.points.empty() && beatsPerSecond > 0.0)
+    {
+        const double sinceStart = std::max (0.0, beat - t.startBeat());
+        double fade = t.vibrato.fadeBeats > 0.0 ? std::min (1.0, sinceStart / t.vibrato.fadeBeats) : 1.0;
+        fade = fade * fade * (3.0 - 2.0 * fade); // smooth start
+        const double seconds = sinceStart / beatsPerSecond;
+        pitch += t.vibrato.depthCents / 100.0 * fade * std::sin (6.283185307179586 * t.vibrato.rateHz * seconds);
+    }
+    return pitch;
+}
+
+Pattern extractStrokes (const Pattern& p, const std::vector<std::uint32_t>& ids)
+{
+    Pattern out;
+    out.lengthBeats = p.lengthBeats;
+    out.tuning = p.tuning;
+    for (const auto& t : p.trajectories)
+        if (std::find (ids.begin(), ids.end(), t.id) != ids.end())
+            out.trajectories.push_back (t);
+    return out;
+}
+
+std::vector<std::uint32_t> insertStrokes (Pattern& p, const std::vector<Trajectory>& strokes, double deltaBeats)
+{
+    std::vector<std::uint32_t> ids;
+    std::uint32_t next = p.nextId();
+    for (auto t : strokes)
+    {
+        if (t.points.empty())
+            continue;
+        t.id = next++;
+        for (auto& pt : t.points)
+            pt.beat += deltaBeats;
+        p.trajectories.push_back (std::move (t));
+        ids.push_back (p.trajectories.back().id);
+    }
+    moveTrajectories (p, ids, 0.0, 0.0); // pulls the group back inside the loop / MIDI range if it went past
+    return ids;
+}
+
 void snapEnds (Trajectory& t, double step, double maxBeat)
 {
     if (t.points.empty() || step <= 0.0)
@@ -132,7 +175,7 @@ void cutTrajectory (Pattern& p, std::uint32_t id, double fromBeat, double toBeat
     if (toBeat <= original.startBeat() || fromBeat >= original.endBeat())
         return; // no overlap
 
-    Trajectory left { original.id, {}, original.velocity }, right { p.nextId(), {}, original.velocity };
+    Trajectory left { original.id, {}, original.velocity, original.vibrato }, right { p.nextId(), {}, original.velocity, original.vibrato };
 
     if (fromBeat > original.startBeat())
     {
@@ -197,9 +240,9 @@ void moveTrajectories (Pattern& p, const std::vector<std::uint32_t>& ids, double
 
 namespace
 {
-    // Version 2 added "v <velocity>" after the id, version 3 the "tuning <key> <scale> <magnet>" line.
-    // Older versions still load, with defaults for what they lack.
-    constexpr const char* header = "PitchPaintPattern 3";
+    // Version 2 added "v <velocity>" after the id, version 3 the "tuning <key> <scale> <magnet>" line, version 4
+    // an optional "vib <cents> <hz> <fade>" after the velocity. Older versions still load, with defaults.
+    constexpr const char* header = "PitchPaintPattern 4";
 
     void appendNumber (std::string& s, double v)
     {
@@ -220,6 +263,15 @@ std::string serialise (const Pattern& p)
     for (const auto& t : p.trajectories)
     {
         s += "\nt " + std::to_string (t.id) + " v " + std::to_string (t.velocity);
+        if (t.vibrato.isOn())
+        {
+            s += " vib ";
+            appendNumber (s, t.vibrato.depthCents);
+            s += ' ';
+            appendNumber (s, t.vibrato.rateHz);
+            s += ' ';
+            appendNumber (s, t.vibrato.fadeBeats);
+        }
         for (const auto& pt : t.points)
         {
             s += ' ';
@@ -261,7 +313,7 @@ std::optional<Pattern> parsePattern (const std::string& text)
 
     const auto magic = word();
     const auto version = word();
-    if (magic != "PitchPaintPattern" || (version != "1" && version != "2" && version != "3") || word() != "length")
+    if (magic != "PitchPaintPattern" || (version != "1" && version != "2" && version != "3" && version != "4") || word() != "length")
         return std::nullopt;
 
     Pattern p;
@@ -295,6 +347,18 @@ std::optional<Pattern> parsePattern (const std::string& text)
             if (word() != "v" || ! number (velocity) || velocity < 1.0 || velocity > 127.0)
                 return std::nullopt;
             t.velocity = (int) velocity;
+        }
+        if (const char* save = pos; word() == "vib")
+        {
+            Vibrato v;
+            if (! number (v.depthCents) || ! number (v.rateHz) || ! number (v.fadeBeats) || v.depthCents < 0.0
+                || v.depthCents > 1200.0 || v.rateHz <= 0.0 || v.rateHz > 50.0 || v.fadeBeats < 0.0)
+                return std::nullopt;
+            t.vibrato = v;
+        }
+        else
+        {
+            pos = save;
         }
         while (! atLineEnd())
         {

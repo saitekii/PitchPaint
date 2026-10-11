@@ -100,7 +100,10 @@ void PitchPaintProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
     }
     else
     {
-        const double beatsPerSample = pos->getBpm().orFallback (120.0) / 60.0 / sampleRate;
+        const double bps = pos->getBpm().orFallback (120.0) / 60.0;
+        const double beatsPerSample = bps / sampleRate;
+        renderer.setBeatsPerSecond (bps);
+        beatsPerSecond.store (bps);
 
         // Seek or host loop: release everything; notes restart from the new position.
         if (wasPlaying && std::abs (*ppq - expectedPpq) > 1.0e-3)
@@ -142,6 +145,10 @@ void PitchPaintProcessor::getStateInformation (juce::MemoryBlock& dest)
     root.setAttribute ("snap", gridDivisions[getGridIndex()].name);
     root.setAttribute ("velocity", getNewStrokeVelocity());
     root.setAttribute ("smoothing", getDrawSmoothing());
+    const auto vib = getNewStrokeVibrato();
+    root.setAttribute ("vibratoDepth", vib.depthCents);
+    root.setAttribute ("vibratoRate", vib.rateHz);
+    root.setAttribute ("vibratoFade", vib.fadeBeats);
     if (auto paramsXml = params.copyState().createXml())
         root.addChildElement (paramsXml.release());
     root.createNewChildElement ("Pattern")->addTextElement (juce::String (pitchpaint::serialise (*current)));
@@ -166,6 +173,8 @@ void PitchPaintProcessor::setStateInformation (const void* data, int size)
 
     setNewStrokeVelocity (xml->getIntAttribute ("velocity", pitchpaint::Trajectory::defaultVelocity));
     setDrawSmoothing (xml->getIntAttribute ("smoothing", 40));
+    setNewStrokeVibrato ({ xml->getDoubleAttribute ("vibratoDepth", 0.0), xml->getDoubleAttribute ("vibratoRate", 5.5),
+                           xml->getDoubleAttribute ("vibratoFade", 0.5) });
     const auto snapName = xml->getStringAttribute ("snap", gridDivisions[defaultGridIndex].name);
     for (int i = 0; i < (int) std::size (gridDivisions); ++i)
         if (snapName == gridDivisions[i].name)

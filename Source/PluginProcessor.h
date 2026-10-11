@@ -70,6 +70,21 @@ public:
     int getDrawSmoothing() const { return drawSmoothing.load(); }
     void setDrawSmoothing (int percent) { drawSmoothing.store (juce::jlimit (0, 100, percent)); }
 
+    // Vibrato given to newly drawn strokes (off by default). Saved with the project.
+    pitchpaint::Vibrato getNewStrokeVibrato() const
+    {
+        return { newVibratoDepth.load(), newVibratoRate.load(), newVibratoFade.load() };
+    }
+    void setNewStrokeVibrato (pitchpaint::Vibrato v)
+    {
+        newVibratoDepth.store (juce::jlimit (0.0, 200.0, v.depthCents));
+        newVibratoRate.store (juce::jlimit (0.5, 12.0, v.rateHz));
+        newVibratoFade.store (juce::jlimit (0.0, 4.0, v.fadeBeats));
+    }
+
+    // Host tempo as seen by the audio thread (for drawing vibrato in Hz). 120 BPM until the host reports one.
+    double getBeatsPerSecond() const { return beatsPerSecond.load(); }
+
     // Velocity given to newly drawn strokes (each stroke keeps its own). Saved with the project.
     int getNewStrokeVelocity() const { return newStrokeVelocity.load(); }
     void setNewStrokeVelocity (int v) { newStrokeVelocity.store (juce::jlimit (1, 127, v)); }
@@ -86,6 +101,8 @@ private:
     std::atomic<int> gridIndex { defaultGridIndex };
     std::atomic<int> newStrokeVelocity { pitchpaint::Trajectory::defaultVelocity };
     std::atomic<int> drawSmoothing { 40 };
+    std::atomic<double> newVibratoDepth { 0.0 }, newVibratoRate { 5.5 }, newVibratoFade { 0.5 };
+    std::atomic<double> beatsPerSecond { 2.0 };
     pitchpaint::UndoHistory history;
     std::optional<pitchpaint::Pattern> gestureStart;
     pitchpaint::PatternSnapshots snapshots;

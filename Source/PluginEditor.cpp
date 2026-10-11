@@ -5,7 +5,7 @@ using namespace theme;
 namespace
 {
     constexpr juce::uint32 statusMillis = 4000;
-    const juce::String shortcutsHint ("P/L/S/E: tools | Shift: snap pitch | Alt: ignore grid | G: snap | M: smooth | Ctrl+Z/Y");
+    const juce::String shortcutsHint ("P/L/S/E: tools | Shift: snap pitch | Alt: ignore grid | G: snap | Ctrl+C/V/D | Ctrl+Z/Y");
 }
 
 PitchPaintEditor::PitchPaintEditor (PitchPaintProcessor& p)
@@ -90,6 +90,13 @@ PitchPaintEditor::PitchPaintEditor (PitchPaintProcessor& p)
         showStatus (tuningDescription());
     };
 
+    editMenuButton.setButtonText (juce::String::fromUTF8 ("Edit \xe2\x96\xbe")); // "Edit" + small down triangle
+    editMenuButton.setTitle ("Edit menu");
+    editMenuButton.setTooltip ("Cut, copy, paste, duplicate, delete, select all, smooth.");
+    editMenuButton.onClick = [this] { showEditMenu(); };
+    vibratoButton.setTooltip ("Vibrato for the selected strokes, or for new strokes when nothing is selected.");
+    vibratoButton.onClick = [this] { openVibratoPanel(); };
+
     undoButton.onClick = [this] { undo(); };
     redoButton.onClick = [this] { redo(); };
     undoButton.setTooltip ("Undo (Ctrl+Z)");
@@ -169,7 +176,8 @@ PitchPaintEditor::PitchPaintEditor (PitchPaintProcessor& p)
     setFocusContainerType (FocusContainerType::keyboardFocusContainer);
     int order = 1;
     for (auto* c : std::initializer_list<juce::Component*> { &pencilButton, &lineButton, &selectButton, &eraserButton, &undoButton,
-                                                             &redoButton, &smoothButton, &smoothingSlider, &lengthBox, &snapBox,
+                                                             &redoButton, &editMenuButton, &smoothButton, &vibratoButton,
+                                                             &smoothingSlider, &lengthBox, &snapBox,
                                                              &keyBox, &scaleBox, &magnetSlider, &velocitySlider, &modeBox,
                                                              &rangeSlider, &previewToggle, &canvas })
     {
@@ -186,7 +194,7 @@ PitchPaintEditor::PitchPaintEditor (PitchPaintProcessor& p)
 
     setWantsKeyboardFocus (true);
     setResizable (true, true);
-    setResizeLimits (560, 460, 3000, 2000);
+    setResizeLimits (560, 480, 3000, 2000);
     setSize (1300, 640);
 }
 
@@ -286,6 +294,100 @@ juce::String PitchPaintEditor::tuningDescription() const
     return "Magnet " + juce::String (juce::roundToInt (t.magnet * 100.0)) + "% toward " + key + scaleName + ".";
 }
 
+void PitchPaintEditor::showEditMenu()
+{
+    enum { cut = 1, copy, paste, duplicate, remove, selectAll, smooth };
+    const bool hasSelection = ! canvas.getSelection().empty();
+
+    juce::PopupMenu menu;
+    const auto add = [&menu] (int id, const juce::String& text, const juce::String& shortcut, bool enabled)
+    {
+        juce::PopupMenu::Item item (text);
+        item.itemID = id;
+        item.isEnabled = enabled;
+        item.shortcutKeyDescription = shortcut;
+        menu.addItem (item);
+    };
+    add (cut, "Cut", "Ctrl+X", hasSelection);
+    add (copy, "Copy", "Ctrl+C", hasSelection);
+    add (paste, "Paste", "Ctrl+V", PitchCanvas::clipboardHasStrokes());
+    add (duplicate, "Duplicate", "Ctrl+D", hasSelection);
+    add (remove, "Delete", "Del", hasSelection);
+    menu.addSeparator();
+    add (selectAll, "Select all", "Ctrl+A", ! processor.getPattern().trajectories.empty());
+    add (smooth, "Smooth", "M", hasSelection);
+
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&editMenuButton),
+                        [safe = juce::Component::SafePointer<PitchPaintEditor> (this)] (int result)
+                        {
+                            if (safe == nullptr)
+                                return;
+                            auto& c = safe->canvas;
+                            switch (result)
+                            {
+                                case cut: c.cutSelection(); break;
+                                case copy: c.copySelection(); break;
+                                case paste: safe->selectTool (PitchCanvas::Tool::select); c.paste(); break;
+                                case duplicate: c.duplicateSelection(); break;
+                                case remove: c.deleteSelection(); break;
+                                case selectAll: safe->selectTool (PitchCanvas::Tool::select); c.selectAll(); break;
+                                case smooth: c.smoothSelection(); break;
+                                default: break;
+                            }
+                        });
+}
+
+void PitchPaintEditor::openVibratoPanel()
+{
+    const auto selection = canvas.getSelection();
+    auto initial = processor.getNewStrokeVibrato();
+    for (const auto& t : processor.getPattern().trajectories)
+        if (! selection.empty() && t.id == selection.front())
+            initial = t.vibrato;
+    if (! initial.isOn())
+        initial.depthCents = 0.0; // keep rate and fade from before, so turning depth up starts somewhere sensible
+
+    const auto heading = selection.empty() ? juce::String ("Vibrato for new strokes")
+                                           : "Vibrato for " + juce::String ((int) selection.size())
+                                                 + (selection.size() == 1 ? " selected stroke" : " selected strokes");
+    auto panel = std::make_unique<VibratoPanel> (initial, heading);
+
+    const auto describe = [] (pitchpaint::Vibrato v)
+    {
+        return v.isOn() ? "Vibrato " + juce::String (juce::roundToInt (v.depthCents)) + " ct at " + juce::String (v.rateHz, 1) + " Hz"
+                        : juce::String ("Vibrato off");
+    };
+    panel->onGestureStart = [this] { if (! canvas.getSelection().empty()) processor.beginGesture(); };
+    panel->onChange = [this, describe] (pitchpaint::Vibrato v, bool live)
+    {
+        if (canvas.getSelection().empty())
+        {
+            processor.setNewStrokeVibrato (v);
+            if (! live)
+                showStatus (describe (v) + " for new strokes.");
+            return;
+        }
+        canvas.setSelectionVibrato (v, live);
+        if (! live)
+            showStatus (describe (v) + " on the selection. Ctrl+Z to undo.");
+    };
+    panel->onGestureEnd = [this, describe]
+    {
+        const auto& sel = canvas.getSelection();
+        if (sel.empty())
+        {
+            showStatus (describe (processor.getNewStrokeVibrato()) + " for new strokes.");
+            return;
+        }
+        processor.endGesture(); // a whole slider drag is one undo step
+        for (const auto& t : processor.getPattern().trajectories)
+            if (t.id == sel.front())
+                showStatus (describe (t.vibrato) + " on the selection. Ctrl+Z to undo.");
+    };
+
+    juce::CallOutBox::launchAsynchronously (std::move (panel), vibratoButton.getBounds(), this);
+}
+
 void PitchPaintEditor::undo()
 {
     if (! processor.canUndo())
@@ -383,6 +485,10 @@ bool PitchPaintEditor::keyPressed (const juce::KeyPress& key)
         else if (letter == 'Z') undo();
         else if (letter == 'Y') redo();
         else if (letter == 'A') { selectTool (PitchCanvas::Tool::select); canvas.selectAll(); }
+        else if (letter == 'C') canvas.copySelection();
+        else if (letter == 'X') canvas.cutSelection();
+        else if (letter == 'V') { selectTool (PitchCanvas::Tool::select); canvas.paste(); }
+        else if (letter == 'D') canvas.duplicateSelection();
         else return false;
         return true;
     }
@@ -436,7 +542,8 @@ std::vector<std::vector<PitchPaintEditor::Item>> PitchPaintEditor::toolbarGroups
     // Attached labels sit left of their control: reserve their width as a spacer before the control.
     return {
         { { &pencilButton, 64 }, { &lineButton, 56 }, { &selectButton, 64 }, { &eraserButton, 64 } },
-        { { &undoButton, 54 }, { &redoButton, 54 }, { &smoothButton, 66 } },
+        { { &undoButton, 54 }, { &redoButton, 54 }, { &editMenuButton, 64 } },
+        { { &smoothButton, 66 }, { &vibratoButton, 84 } },
         { { nullptr, labelWidth (smoothingLabel) }, { &smoothingSlider, 112 } },
         { { nullptr, labelWidth (lengthLabel) }, { &lengthBox, 88 }, { nullptr, labelWidth (snapLabel) }, { &snapBox, 80 } },
         { { nullptr, labelWidth (keyLabel) }, { &keyBox, 64 }, { nullptr, labelWidth (scaleLabel) }, { &scaleBox, 148 },

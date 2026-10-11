@@ -50,6 +50,9 @@ public:
     void allNotesOff (MidiOut& out, int sample);
 
     const RenderSettings& getSettings() const { return settings; }
+
+    // Host tempo, for vibrato rates in Hz. Call before render() when it changes (defaults to 120 BPM).
+    void setBeatsPerSecond (double bps) { if (bps > 0.0) beatsPerSecond = bps; }
     int numSoundingVoices() const;
 
 private:
@@ -75,6 +78,7 @@ private:
     std::uint64_t counter = 0;
     std::vector<int> evalPoints;
     Tuning tuning; // of the pattern being rendered
+    double beatsPerSecond = 2.0;
 };
 
 } // namespace pitchpaint
