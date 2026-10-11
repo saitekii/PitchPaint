@@ -15,7 +15,7 @@ PitchPaintEditor::PitchPaintEditor (PitchPaintProcessor& p)
     pencilButton.setToggleState (true, juce::dontSendNotification);
     pencilButton.setTooltip ("Draw (P)");
     selectButton.setTooltip ("Select and move (S). Shift-click adds, drag empty space to box-select, Shift-drag moves by whole semitones");
-    eraserButton.setTooltip ("Erase (E). Right-drag erases with any tool");
+    eraserButton.setTooltip ("Erase (E): cuts out what it passes over, splitting strokes. Shift: delete whole strokes. Right-drag erases with any tool");
 
     undoButton.onClick = [this] { processor.undo(); };
     redoButton.onClick = [this] { processor.redo(); };
@@ -36,7 +36,7 @@ PitchPaintEditor::PitchPaintEditor (PitchPaintProcessor& p)
 
     synthHint.setColour (juce::Label::textColourId, juce::Colour (0xffffcc80));
     synthHint.setMinimumHorizontalScale (0.7f);
-    controlsHint.setText ("Shift: snap  |  Del: delete  |  Ctrl+Z / Ctrl+Y  |  Ctrl+wheel: zoom", juce::dontSendNotification);
+    controlsHint.setText ("Shift: snap | Ctrl+Z/Y | Shift+wheel: scroll time | Ctrl+wheel: zoom time | Alt+wheel: zoom pitch", juce::dontSendNotification);
     controlsHint.setColour (juce::Label::textColourId, juce::Colours::grey);
     controlsHint.setJustificationType (juce::Justification::centredRight);
     controlsHint.setMinimumHorizontalScale (0.7f);
@@ -152,7 +152,7 @@ void PitchPaintEditor::resized()
     bar.removeFromLeft (10);
     previewToggle.setBounds (bar.removeFromLeft (80));
 
-    controlsHint.setBounds (footer.removeFromRight (juce::jmin (420, footer.getWidth() / 2)));
+    controlsHint.setBounds (footer.removeFromRight (juce::jmin (560, footer.getWidth() / 2)));
     synthHint.setBounds (footer);
 
     canvas.setBounds (area);

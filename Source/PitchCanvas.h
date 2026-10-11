@@ -23,10 +23,15 @@ public:
     void deleteSelection();
     const std::vector<std::uint32_t>& getSelection() const { return selection; }
 
+    // Visible time range in beats (the whole loop unless zoomed in with Ctrl+wheel).
+    juce::Range<double> getVisibleBeats() const;
+
     void paint (juce::Graphics&) override;
     void mouseDown (const juce::MouseEvent&) override;
     void mouseDrag (const juce::MouseEvent&) override;
     void mouseUp (const juce::MouseEvent&) override;
+    void mouseMove (const juce::MouseEvent&) override;
+    void mouseExit (const juce::MouseEvent&) override;
     void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
 
 private:
@@ -38,6 +43,7 @@ private:
 
     juce::Rectangle<float> plotArea() const;
     float beatToX (double beat) const;
+    double xToBeat (float x) const; // unclamped
     float pitchToY (double pitch) const;
     pitchpaint::PitchPoint pointAt (juce::Point<float>, bool snapToSemitone) const;
 
@@ -49,13 +55,16 @@ private:
     bool sweepHits (const pitchpaint::Trajectory&, juce::Line<float> swept, float radius) const;
     std::uint32_t trajectoryAt (juce::Point<float>) const; // 0 if none
     bool isSelected (std::uint32_t id) const;
-    void eraseAlong (juce::Point<float> from, juce::Point<float> to);
+    void eraseAlong (juce::Point<float> from, juce::Point<float> to, bool wholeStrokes);
 
     PitchPaintProcessor& processor;
     Tool tool = Tool::pencil;
 
     double bottomPitch = 36.0; // visible pitch range
     double topPitch = 96.0;
+    bool showWholeLoop = true;      // visible time range; follows loop-length changes while showing the whole loop
+    double viewStart = 0.0, viewLength = 16.0;
+    std::optional<juce::Point<float>> hoverPos; // for the eraser circle
 
     Drag drag = Drag::none;
     juce::Point<float> dragStart;

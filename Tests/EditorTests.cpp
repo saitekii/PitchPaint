@@ -164,9 +164,9 @@ int main (int argc, char** argv)
         std::printf ("[info] wrote %s\n", argv[1]);
     }
 
-    // 3. Right-drag across the wiggle erases it, and only it.
+    // 3. Shift+right-drag across the wiggle deletes the whole stroke, and only it.
     drag (*canvas, { at (*canvas, L, 6.0, 69.0), at (*canvas, L, 6.0, 76.0) },
-          juce::ModifierKeys (juce::ModifierKeys::rightButtonModifier));
+          juce::ModifierKeys (juce::ModifierKeys::rightButtonModifier | juce::ModifierKeys::shiftModifier));
     CHECK (proc.getPattern().trajectories.size() == 2);
 
     // 4. Undo brings the erased stroke back in one step (the whole swipe is one gesture); redo removes it again.
@@ -245,6 +245,80 @@ int main (int argc, char** argv)
         CHECK (proc.getPattern().lengthBeats == 4.0);
         proc.undo();
         CHECK (proc.getPattern().lengthBeats == 16.0);
+    }
+
+    // 9. Split eraser: a vertical right-drag through the middle of the glide cuts out the span under the eraser
+    //    circle (8 px each side), leaving two strokes; the left part keeps the id. One undo step restores it.
+    {
+        const auto before = proc.getPattern();
+        const auto original = before.trajectories[0];
+        const double cutAt = 4.0, cutPitch = original.pitchAt (cutAt);
+        drag (*canvas, { at (*canvas, L, cutAt, cutPitch - 3.0), at (*canvas, L, cutAt, cutPitch + 3.0) },
+              juce::ModifierKeys (juce::ModifierKeys::rightButtonModifier));
+
+        const auto& after = proc.getPattern().trajectories;
+        CHECK (after.size() == before.trajectories.size() + 1);
+        if (after.size() == before.trajectories.size() + 1)
+        {
+            const double halfGap = 8.0 / (canvas->getWidth() - 40.0) * L; // eraser radius in beats
+            const auto& left = after[0];
+            const auto& right = after[1];
+            CHECK (left.id == original.id && right.id != original.id);
+            CHECK (std::abs (left.endBeat() - (cutAt - halfGap)) < 0.02);
+            CHECK (std::abs (right.startBeat() - (cutAt + halfGap)) < 0.02);
+            CHECK (std::abs (left.points.back().pitch - original.pitchAt (left.endBeat())) < 1e-9); // exact cut, no jump
+            std::printf ("[info] split: left ends %.3f, right starts %.3f (expected %.3f / %.3f)\n", left.endBeat(),
+                         right.startBeat(), cutAt - halfGap, cutAt + halfGap);
+        }
+        proc.undo();
+        CHECK (proc.getPattern() == before);
+    }
+
+    // 10. Horizontal zoom: Ctrl+wheel zooms time around the mouse, Shift+wheel scrolls, drawing lands where it should.
+    {
+        const auto wheelAt = [&] (double beat, float deltaY, juce::ModifierKeys mods)
+        {
+            const auto pos = at (*canvas, L, beat, 60.0);
+            canvas->mouseWheelMove (makeEvent (*canvas, pos, pos, mods), juce::MouseWheelDetails { 0.0f, deltaY, false, false, false });
+        };
+        const auto ctrlMods = juce::ModifierKeys (juce::ModifierKeys::ctrlModifier);
+
+        // at() maps with the whole-loop view, which matches the canvas only before the first zoom step;
+        // after it, beat 8 (the centre) stays at the same pixel, so zooming twice there stays anchored on beat 8.
+        wheelAt (8.0, 0.5, ctrlMods);
+        wheelAt (8.0, 0.5, ctrlMods);
+        const auto view = canvas->getVisibleBeats();
+        CHECK (view.getLength() < 10.0 && view.contains (8.0));
+        std::printf ("[info] zoomed view: %.3f .. %.3f\n", view.getStart(), view.getEnd());
+
+        // Draw in the zoomed view: positions must map through the visible range, not the whole loop.
+        const auto atZoomed = [&] (double beat, double pitch)
+        {
+            const float w = (float) canvas->getWidth() - 40.0f, h = (float) canvas->getHeight();
+            return juce::Point<float> { 40.0f + (float) ((beat - view.getStart()) / view.getLength()) * w, (float) ((96.0 - pitch) / 60.0) * h };
+        };
+        CHECK (press (juce::KeyPress ('p')));
+        drag (*canvas, { atZoomed (6.0, 48.0), atZoomed (6.5, 49.0), atZoomed (7.0, 48.0) });
+        const auto& drawn = proc.getPattern().trajectories.back();
+        CHECK (std::abs (drawn.startBeat() - 6.0) < 0.01 && std::abs (drawn.endBeat() - 7.0) < 0.01);
+        CHECK (std::abs (drawn.pitchAt (6.5) - 49.0) < 0.1);
+
+        if (argc > 3)
+        {
+            const auto snapshot = editor->createComponentSnapshot (editor->getLocalBounds());
+            juce::FileOutputStream stream (juce::File::getCurrentWorkingDirectory().getChildFile (argv[3]));
+            stream.setPosition (0);
+            stream.truncate();
+            juce::PNGImageFormat().writeImageToStream (snapshot, stream);
+        }
+
+        // Shift+wheel scrolls time by a quarter of the visible span; zooming far out shows the whole loop again.
+        const double startBefore = view.getStart();
+        wheelAt (8.0, -0.5, juce::ModifierKeys (juce::ModifierKeys::shiftModifier));
+        CHECK (std::abs (canvas->getVisibleBeats().getStart() - (startBefore + 0.5 * view.getLength() * 0.25)) < 1e-9);
+        for (int i = 0; i < 10; ++i)
+            wheelAt (8.0, -0.5, ctrlMods);
+        CHECK (canvas->getVisibleBeats() == juce::Range<double> (0.0, L));
     }
 
     proc.setPlayHead (nullptr);

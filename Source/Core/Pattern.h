@@ -44,6 +44,11 @@ struct Pattern
     bool operator== (const Pattern&) const = default;
 };
 
+// Removes the time range [fromBeat, toBeat] from a trajectory (split eraser). The parts on either side remain, with
+// end points interpolated exactly at the cut: the left part keeps the id, the right part gets a new one.
+// Parts shorter than minLength beats are dropped, so erasing never leaves inaudible slivers.
+void cutTrajectory (Pattern&, std::uint32_t id, double fromBeat, double toBeat, double minLength = 1.0 / 32.0);
+
 // Shifts the given trajectories in time and pitch. The shift is limited so they stay inside the loop and 0..127.
 void moveTrajectories (Pattern&, const std::vector<std::uint32_t>& ids, double deltaBeats, double deltaPitch);
 

@@ -46,10 +46,27 @@ juce::Rectangle<float> PitchCanvas::plotArea() const
     return getLocalBounds().toFloat().withTrimmedLeft (gutter);
 }
 
+juce::Range<double> PitchCanvas::getVisibleBeats() const
+{
+    const double length = processor.getPattern().lengthBeats;
+    if (showWholeLoop || viewLength >= length)
+        return { 0.0, length };
+    const double start = juce::jlimit (0.0, length - viewLength, viewStart);
+    return { start, start + viewLength };
+}
+
 float PitchCanvas::beatToX (double beat) const
 {
     const auto area = plotArea();
-    return area.getX() + (float) (beat / processor.getPattern().lengthBeats) * area.getWidth();
+    const auto view = getVisibleBeats();
+    return area.getX() + (float) ((beat - view.getStart()) / view.getLength()) * area.getWidth();
+}
+
+double PitchCanvas::xToBeat (float x) const
+{
+    const auto area = plotArea();
+    const auto view = getVisibleBeats();
+    return view.getStart() + (double) (x - area.getX()) / area.getWidth() * view.getLength();
 }
 
 float PitchCanvas::pitchToY (double pitch) const
@@ -61,8 +78,7 @@ float PitchCanvas::pitchToY (double pitch) const
 pitchpaint::PitchPoint PitchCanvas::pointAt (juce::Point<float> pos, bool snapToSemitone) const
 {
     const auto area = plotArea();
-    const double length = processor.getPattern().lengthBeats;
-    const double beat = juce::jlimit (0.0, length, (double) (pos.x - area.getX()) / area.getWidth() * length);
+    const double beat = juce::jlimit (0.0, processor.getPattern().lengthBeats, xToBeat (pos.x));
     double pitch = topPitch - (double) (pos.y - area.getY()) / area.getHeight() * (topPitch - bottomPitch);
     pitch = juce::jlimit (0.0, 127.0, snapToSemitone ? std::round (pitch) : pitch);
     return { beat, pitch };
@@ -73,8 +89,17 @@ void PitchCanvas::paint (juce::Graphics& g)
 {
     const auto& pattern = processor.getPattern();
     paintGrid (g, pattern);
+
+    juce::Graphics::ScopedSaveState clip (g);
+    g.reduceClipRegion (plotArea().toNearestInt());
     paintTrajectories (g, pattern);
     paintPlayhead (g, pattern);
+
+    if (tool == Tool::eraser && hoverPos)
+    {
+        g.setColour (juce::Colours::white.withAlpha (0.6f));
+        g.drawEllipse (juce::Rectangle<float> (2.0f * eraseRadius, 2.0f * eraseRadius).withCentre (*hoverPos), 1.0f);
+    }
 }
 
 void PitchCanvas::paintGrid (juce::Graphics& g, const pitchpaint::Pattern& pattern)
@@ -112,10 +137,27 @@ void PitchCanvas::paintGrid (juce::Graphics& g, const pitchpaint::Pattern& patte
         }
     }
 
-    for (int beat = 0; beat <= (int) pattern.lengthBeats; ++beat)
+    // Vertical lines: bars, beats, and quarter beats once zoomed in far enough to see them.
+    const auto view = getVisibleBeats();
+    const double pxPerBeat = area.getWidth() / view.getLength();
+    const double step = pxPerBeat >= 60.0 ? 0.25 : (pxPerBeat >= 10.0 ? 1.0 : 4.0);
+    const double lastBeat = std::min (view.getEnd(), pattern.lengthBeats);
+
+    for (auto k = (long long) std::ceil (view.getStart() / step); k * step <= lastBeat + 1.0e-9; ++k)
     {
-        g.setColour (beat % 4 == 0 ? colours::barLine : colours::beatLine);
-        g.drawVerticalLine (juce::roundToInt (beatToX (beat)), area.getY(), area.getBottom());
+        const double beat = k * step;
+        const bool isBar = std::fmod (beat, 4.0) == 0.0;
+        const bool isBeat = std::fmod (beat, 1.0) == 0.0;
+        g.setColour (isBar ? colours::barLine : (isBeat ? colours::beatLine : colours::beatLine.withAlpha (0.5f)));
+        const int x = juce::roundToInt (beatToX (beat));
+        g.drawVerticalLine (x, area.getY(), area.getBottom());
+
+        if (isBar && beat < pattern.lengthBeats)
+        {
+            g.setColour (colours::label);
+            g.drawText (juce::String ((int) (beat / 4.0) + 1), juce::Rectangle<float> ((float) x + 4.0f, area.getY() + 2.0f, 40.0f, 14.0f),
+                        juce::Justification::centredLeft);
+        }
     }
 }
 
@@ -290,7 +332,7 @@ void PitchCanvas::mouseDown (const juce::MouseEvent& e)
     {
         drag = Drag::erasing;
         lastErasePos = e.position;
-        eraseAlong (e.position, e.position);
+        eraseAlong (e.position, e.position, e.mods.isShiftDown());
         return;
     }
 
@@ -335,14 +377,15 @@ void PitchCanvas::mouseDrag (const juce::MouseEvent& e)
     switch (drag)
     {
         case Drag::erasing:
-            eraseAlong (lastErasePos, e.position);
+            eraseAlong (lastErasePos, e.position, e.mods.isShiftDown());
             lastErasePos = e.position;
+            hoverPos = e.position;
             break;
 
         case Drag::moving:
         {
             const auto area = plotArea();
-            const double deltaBeats = (e.position.x - dragStart.x) / area.getWidth() * moveBase.lengthBeats;
+            const double deltaBeats = (e.position.x - dragStart.x) / area.getWidth() * getVisibleBeats().getLength();
             double deltaPitch = -(e.position.y - dragStart.y) / area.getHeight() * (topPitch - bottomPitch);
             if (e.mods.isShiftDown())
                 deltaPitch = std::round (deltaPitch); // keep intonation: move by whole semitones
@@ -412,40 +455,106 @@ void PitchCanvas::mouseUp (const juce::MouseEvent&)
     repaint();
 }
 
-void PitchCanvas::eraseAlong (juce::Point<float> from, juce::Point<float> to)
+void PitchCanvas::eraseAlong (juce::Point<float> from, juce::Point<float> to, bool wholeStrokes)
 {
-    // Erase every trajectory the mouse swept over since the last event, so fast swipes don't skip strokes.
     auto pattern = processor.getPattern();
-    if (std::erase_if (pattern.trajectories, [&] (const auto& t) { return sweepHits (t, { from, to }, eraseRadius); }) > 0)
+    bool changed = false;
+
+    if (wholeStrokes)
+    {
+        // Delete every trajectory the mouse swept over since the last event, so fast swipes don't skip strokes.
+        changed = std::erase_if (pattern.trajectories, [&] (const auto& t) { return sweepHits (t, { from, to }, eraseRadius); }) > 0;
+    }
+    else
+    {
+        // Split eraser: walk the swept path in small steps; wherever a stroke is under the eraser circle, cut out the
+        // time span the circle covers. Cutting a stroke in the middle leaves two strokes.
+        const auto steps = juce::jmax (1, (int) std::ceil (from.getDistanceFrom (to) / 2.0f));
+        for (int i = 0; i <= steps; ++i)
+        {
+            const auto pos = from + (to - from) * ((float) i / (float) steps);
+            std::vector<std::uint32_t> hit;
+            for (const auto& t : pattern.trajectories)
+                if (sweepHits (t, { pos, pos }, eraseRadius))
+                    hit.push_back (t.id);
+
+            for (const auto id : hit)
+                pitchpaint::cutTrajectory (pattern, id, xToBeat (pos.x - eraseRadius), xToBeat (pos.x + eraseRadius));
+            changed |= ! hit.empty();
+        }
+    }
+
+    if (changed)
     {
         processor.setPattern (std::move (pattern));
         repaint();
     }
 }
 
+void PitchCanvas::mouseMove (const juce::MouseEvent& e)
+{
+    hoverPos = e.position;
+    if (tool == Tool::eraser)
+        repaint();
+}
+
+void PitchCanvas::mouseExit (const juce::MouseEvent&)
+{
+    hoverPos.reset();
+    repaint();
+}
+
 void PitchCanvas::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)
 {
-    const double span = topPitch - bottomPitch;
+    // wheel: scroll pitch | Shift+wheel or sideways wheel: scroll time | Ctrl+wheel: zoom time | Alt+wheel: zoom pitch
+    const auto view = getVisibleBeats();
+    const double length = processor.getPattern().lengthBeats;
+
+    const auto setView = [&] (double start, double span)
+    {
+        span = juce::jlimit (0.5, length, span);
+        showWholeLoop = span >= length;
+        viewLength = span;
+        viewStart = juce::jlimit (0.0, length - span, start);
+    };
 
     if (e.mods.isCtrlDown() || e.mods.isCommandDown())
     {
-        // Zoom around the pitch under the mouse.
-        const double anchor = pointAt (e.position, false).pitch;
-        const double newSpan = juce::jlimit (6.0, 128.0, span * (1.0 - wheel.deltaY * 0.5));
-        const double frac = (anchor - bottomPitch) / span;
-        bottomPitch = anchor - frac * newSpan;
-        topPitch = bottomPitch + newSpan;
+        const double anchor = xToBeat (e.position.x);
+        const double newSpan = view.getLength() * (1.0 - wheel.deltaY * 0.5);
+        const double frac = (anchor - view.getStart()) / view.getLength();
+        setView (anchor - frac * juce::jlimit (0.5, length, newSpan), newSpan);
+    }
+    else if (e.mods.isShiftDown() || std::abs (wheel.deltaX) > std::abs (wheel.deltaY))
+    {
+        const float delta = wheel.deltaX != 0.0f ? -wheel.deltaX : -wheel.deltaY;
+        setView (view.getStart() + delta * view.getLength() * 0.25, view.getLength());
     }
     else
     {
-        const double shift = wheel.deltaY * span * 0.25;
-        bottomPitch += shift;
-        topPitch += shift;
+        double span = topPitch - bottomPitch;
+
+        if (e.mods.isAltDown())
+        {
+            // Zoom pitch around the pitch under the mouse.
+            const double anchor = pointAt (e.position, false).pitch;
+            const double newSpan = juce::jlimit (6.0, 128.0, span * (1.0 - wheel.deltaY * 0.5));
+            const double frac = (anchor - bottomPitch) / span;
+            bottomPitch = anchor - frac * newSpan;
+            topPitch = bottomPitch + newSpan;
+        }
+        else
+        {
+            const double shift = wheel.deltaY * span * 0.25;
+            bottomPitch += shift;
+            topPitch += shift;
+        }
+
+        // Keep the view inside the MIDI range.
+        span = topPitch - bottomPitch;
+        bottomPitch = juce::jlimit (-0.5, 127.5 - span, bottomPitch);
+        topPitch = bottomPitch + span;
     }
 
-    // Keep the view inside the MIDI range.
-    const double newSpan = topPitch - bottomPitch;
-    bottomPitch = juce::jlimit (-0.5, 127.5 - newSpan, bottomPitch);
-    topPitch = bottomPitch + newSpan;
     repaint();
 }

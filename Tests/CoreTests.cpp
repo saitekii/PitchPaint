@@ -171,6 +171,55 @@ void testMoveTrajectories()
     CHECK (p.trajectories[2].startBeat() == 0.0 && p.trajectories[2].points[0].pitch == 0.0);
 }
 
+void testCutTrajectory()
+{
+    const auto make = []
+    {
+        Pattern p;
+        p.lengthBeats = 8.0;
+        p.trajectories.push_back (line (1, 0.0, 60.0, 1.0, 60.0));
+        p.trajectories.push_back ({ 5, { { 2.0, 60.0 }, { 3.0, 64.0 }, { 6.0, 58.0 } } });
+        p.trajectories.push_back (line (3, 7.0, 50.0, 8.0, 50.0));
+        return p;
+    };
+
+    // Cut from the middle: two parts with exact end pitches, right part directly after the left, new id.
+    auto p = make();
+    cutTrajectory (p, 5, 2.5, 4.0);
+    CHECK (p.trajectories.size() == 4);
+    if (p.trajectories.size() == 4)
+    {
+        const auto& l = p.trajectories[1];
+        const auto& r = p.trajectories[2];
+        CHECK (l.id == 5 && l.startBeat() == 2.0 && l.endBeat() == 2.5 && l.points.back().pitch == 62.0);
+        CHECK (r.id == 6 && r.startBeat() == 4.0 && r.endBeat() == 6.0 && r.points.front().pitch == 62.0);
+        CHECK (r.points.size() == 2 && l.points.size() == 2);
+        CHECK (p.trajectories[3].id == 3);
+    }
+
+    // Cut the start / the end: one part remains, and it keeps the original id.
+    p = make();
+    cutTrajectory (p, 5, 1.0, 3.0);
+    CHECK (p.trajectories.size() == 3 && p.trajectories[1].id == 6 && p.trajectories[1].startBeat() == 3.0);
+    p = make();
+    cutTrajectory (p, 5, 5.0, 9.0);
+    CHECK (p.trajectories.size() == 3 && p.trajectories[1].id == 5 && p.trajectories[1].endBeat() == 5.0
+           && p.trajectories[1].points.back().pitch == 60.0);
+
+    // Covering it entirely removes it; slivers shorter than minLength are dropped; no overlap changes nothing.
+    p = make();
+    cutTrajectory (p, 5, 1.0, 7.0);
+    CHECK (p.trajectories.size() == 2);
+    p = make();
+    cutTrajectory (p, 5, 2.01, 5.99);
+    CHECK (p.trajectories.size() == 2);
+    p = make();
+    cutTrajectory (p, 5, 6.5, 7.0);
+    CHECK (p == make());
+    cutTrajectory (p, 99, 0.0, 8.0); // unknown id
+    CHECK (p == make());
+}
+
 void testUndoHistory()
 {
     Pattern a, b, c;
@@ -553,6 +602,7 @@ int main()
         { "pattern snapshots", testSnapshots },
         { "serialise round trip", testSerialiseRoundTrip },
         { "move trajectories", testMoveTrajectories },
+        { "cut trajectory (split eraser)", testCutTrajectory },
         { "undo history", testUndoHistory },
         { "preview synth plays drawn pitch (Hz)", testPreviewSynthPlaysDrawnPitch },
         { "MPE config messages", testMpeConfigMessages },

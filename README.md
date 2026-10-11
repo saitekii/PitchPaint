@@ -10,7 +10,8 @@ and the plugin drives an **external synthesizer** over MIDI using MPE or pitch b
 
 ## Features
 
-- Pencil, Select and Eraser tools; Shift snaps the pencil to semitones.
+- Pencil, Select and Eraser tools; Shift snaps the pencil to semitones; the eraser cuts strokes apart.
+- Zoom and scroll in time and pitch.
 - Any number of overlapping strokes: up to 15 sounding at once in MPE mode.
 - Select, box-select, move (Shift: by whole semitones), delete; undo/redo.
 - Loops of 1–16 bars following the host's transport; everything is saved with the project.
@@ -44,12 +45,13 @@ The plugin ends up in `build/PitchPaint_artefacts/Release/VST3/PitchPaint.vst3`.
 | Action | How |
 |---|---|
 | Draw | Pencil (P): drag. Shift: snap to semitones. Drawing back over a stroke redraws that part. |
-| Erase | Eraser (E), or right-drag with any tool. Deletes every stroke the swipe touches. |
+| Erase | Eraser (E), or right-drag with any tool: cuts out the part of a stroke it passes over (a cut in the middle leaves two strokes). Hold Shift to delete whole strokes. |
 | Select / move | Select (S): click, Shift-click, or drag a box. Drag a selected stroke to move; Shift moves by whole semitones. |
 | Delete selection | Delete or Backspace |
 | Undo / redo | Ctrl+Z / Ctrl+Y (or Ctrl+Shift+Z), or the toolbar buttons |
 | Select all / deselect | Ctrl+A / Esc |
-| Scroll / zoom pitch | Mouse wheel / Ctrl+wheel |
+| Scroll pitch / time | Mouse wheel / Shift+wheel (or sideways scroll) |
+| Zoom time / pitch | Ctrl+wheel / Alt+wheel |
 
 The horizontal lines sit exactly on semitones (labels: C4 = MIDI 60 = middle C = 261.63 Hz).
 

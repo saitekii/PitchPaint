@@ -54,6 +54,50 @@ void drawSegment (Trajectory& t, PitchPoint from, PitchPoint to)
     pts.insert (pos, to);
 }
 
+void cutTrajectory (Pattern& p, std::uint32_t id, double fromBeat, double toBeat, double minLength)
+{
+    const auto it = std::find_if (p.trajectories.begin(), p.trajectories.end(), [id] (const Trajectory& t) { return t.id == id; });
+    if (it == p.trajectories.end() || it->points.empty())
+        return;
+
+    if (fromBeat > toBeat)
+        std::swap (fromBeat, toBeat);
+
+    const Trajectory original = *it;
+    if (toBeat <= original.startBeat() || fromBeat >= original.endBeat())
+        return; // no overlap
+
+    Trajectory left { original.id, {} }, right { p.nextId(), {} };
+
+    if (fromBeat > original.startBeat())
+    {
+        for (const auto& pt : original.points)
+            if (pt.beat < fromBeat)
+                left.points.push_back (pt);
+        left.points.push_back ({ fromBeat, original.pitchAt (fromBeat) });
+    }
+
+    if (toBeat < original.endBeat())
+    {
+        right.points.push_back ({ toBeat, original.pitchAt (toBeat) });
+        for (const auto& pt : original.points)
+            if (pt.beat > toBeat)
+                right.points.push_back (pt);
+    }
+
+    const auto keep = [minLength] (const Trajectory& t)
+    { return t.points.size() >= 2 && t.endBeat() - t.startBeat() >= minLength; };
+
+    // Replace the original in place (keeps drawing order); the right part goes directly after it.
+    const auto index = it - p.trajectories.begin();
+    p.trajectories.erase (it);
+    auto insertAt = p.trajectories.begin() + index;
+    if (keep (right))
+        insertAt = p.trajectories.insert (insertAt, std::move (right));
+    if (keep (left))
+        p.trajectories.insert (insertAt, std::move (left));
+}
+
 void moveTrajectories (Pattern& p, const std::vector<std::uint32_t>& ids, double deltaBeats, double deltaPitch)
 {
     const auto selected = [&] (const Trajectory& t) { return std::find (ids.begin(), ids.end(), t.id) != ids.end(); };
