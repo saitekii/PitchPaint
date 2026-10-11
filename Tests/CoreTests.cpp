@@ -141,7 +141,15 @@ void testSerialiseRoundTrip()
 
     CHECK (parsePattern (serialise (Pattern {})) == Pattern {});
     CHECK (! parsePattern ("").has_value());
-    CHECK (! parsePattern ("PitchPaintPattern 3\nlength 4\n").has_value());              // unknown future version
+    CHECK (! parsePattern ("PitchPaintPattern 4\nlength 4\n").has_value());              // unknown future version
+
+    // Tuning round-trips; a malformed tuning line is rejected; version 2 (no tuning) loads with the default.
+    Pattern tuned = p;
+    tuned.tuning = { 9, 2, 0.35 };
+    CHECK (parsePattern (serialise (tuned)) == tuned);
+    CHECK (! parsePattern ("PitchPaintPattern 3\nlength 4\ntuning 12 0 0\n").has_value());
+    const auto v2 = parsePattern ("PitchPaintPattern 2\nlength 4\nt 1 v 90 0 60 1 62\n");
+    CHECK (v2.has_value() && v2->tuning == Tuning {} && v2->trajectories.size() == 1 && v2->trajectories[0].velocity == 90);
     CHECK (! parsePattern ("PitchPaintPattern 2\nlength 4\nt 1 v 0 0 60 1 60\n").has_value()); // velocity out of range
 
     // Version 1 (saved before velocity existed) loads with the default velocity.
@@ -270,6 +278,95 @@ void testVelocity()
         return std::sqrt (sum / 4800.0);
     };
     CHECK (std::abs (rmsFor (64) / rmsFor (127) - 64.0 / 127.0) < 0.01);
+}
+
+void testTuning()
+{
+    // Scale membership and nearest scale note (D minor: D E F G A Bb C).
+    const Tuning dMinor { 2, 2, 0.0 };
+    CHECK (dMinor.inScale (62) && dMinor.inScale (65) && dMinor.inScale (70) && ! dMinor.inScale (66) && ! dMinor.inScale (61));
+    CHECK (dMinor.nearestScaleNote (65.9) == 65.0 && dMinor.nearestScaleNote (66.3) == 67.0); // F# is out: F or G
+    CHECK (Tuning {}.nearestScaleNote (60.4) == 60.0);
+
+    // Magnet 0 changes nothing; scale notes and midpoints between neighbouring scale notes never move.
+    for (double pitch = 50.0; pitch < 70.0; pitch += 0.173)
+        CHECK (Tuning {}.apply (pitch) == pitch);
+    const Tuning strong { 0, 1, 1.0 }; // C major, full magnet
+    CHECK (strong.apply (64.0) == 64.0 && std::abs (strong.apply (64.5) - 64.5) < 1e-12); // E-F is a half step
+    CHECK (std::abs (strong.apply (61.0) - 61.0) < 1e-12);                                  // C-D midpoint
+
+    // It pulls toward notes: 20 cents off becomes well under a cent at full strength, and less pull when weaker.
+    CHECK (std::abs (strong.apply (60.2) - 60.0) < 0.01);
+    const Tuning medium { 0, 0, 0.5 };
+    const double mediumOffset = medium.apply (60.2) - 60.0;
+    CHECK (mediumOffset > 0.0 && mediumOffset < 0.05);
+
+    // Continuous and monotonic across a whole range: glides stay glides (no jumps), only their shape changes.
+    double previous = strong.apply (55.0);
+    double biggestStep = 0.0;
+    for (double pitch = 55.0005; pitch < 72.0; pitch += 0.0005)
+    {
+        const double v = strong.apply (pitch);
+        CHECK (v >= previous);
+        biggestStep = std::max (biggestStep, v - previous);
+        previous = v;
+    }
+    CHECK (biggestStep < 0.01);
+
+    // The renderer plays the tuned pitch: a stroke held 30 cents sharp of E4 sounds as E4 with a full magnet.
+    Pattern p;
+    p.lengthBeats = 4.0;
+    p.trajectories.push_back (line (1, 0.0, 64.3, 2.0, 64.3));
+    p.tuning = strong;
+    MidiRenderer r;
+    MidiOut out;
+    r.configure ({ OutputMode::mpe, 48 }, out, 0);
+    out.clear();
+    r.render (p, 0.0, bps, 512, out);
+    int bend = -1, note = -1;
+    for (const auto& e : out)
+    {
+        if (isBend (e) && bend < 0) bend = bendOf (e);
+        if (isNoteOn (e)) note = e.bytes[1];
+    }
+    CHECK (note == 64 && std::abs (pitchFromBend (bend, 64, 48) - 64.0) < 0.02); // within 2 cents
+}
+
+void testSmoothing()
+{
+    // A held note with hand jitter (+-0.3 semitones): smoothing removes most of it, keeps the ends.
+    Trajectory t { 1, {}, 90 };
+    unsigned seed = 1;
+    for (int i = 0; i <= 200; ++i)
+    {
+        seed = seed * 1103515245u + 12345u;
+        const double jitter = ((seed >> 16) % 1000) / 1000.0 * 0.6 - 0.3;
+        t.points.push_back ({ 1.0 + i * 0.01, 60.0 + jitter });
+    }
+    const auto roughness = [] (const Trajectory& tr)
+    {
+        double sum = 0.0;
+        for (size_t i = 1; i + 1 < tr.points.size(); ++i)
+            sum += std::abs (tr.points[i + 1].pitch - 2.0 * tr.points[i].pitch + tr.points[i - 1].pitch);
+        return sum / (double) tr.points.size();
+    };
+    const auto original = t;
+    smoothTrajectory (t, 1.0 / 16.0);
+    CHECK (t.startBeat() == original.startBeat() && t.endBeat() == original.endBeat());
+    CHECK (t.points.front().pitch == original.points.front().pitch && t.points.back().pitch == original.points.back().pitch);
+    CHECK (t.velocity == 90);
+    CHECK (roughness (t) < roughness (original) * 0.1);
+    double maxDeviation = 0.0;
+    for (size_t i = 3; i + 3 < t.points.size(); ++i)
+        maxDeviation = std::max (maxDeviation, std::abs (t.points[i].pitch - 60.0));
+    CHECK (maxDeviation < 0.15);
+
+    // A clean glide stays a glide (start and end pitches kept, still monotonic).
+    Trajectory glide = line (2, 0.0, 60.0, 2.0, 67.0);
+    smoothTrajectory (glide, 0.25);
+    CHECK (glide.points.front().pitch == 60.0 && glide.points.back().pitch == 67.0);
+    for (size_t i = 1; i < glide.points.size(); ++i)
+        CHECK (glide.points[i].pitch >= glide.points[i - 1].pitch);
 }
 
 void testTimeGrid()
@@ -683,6 +780,8 @@ int main()
         { "cut trajectory (split eraser)", testCutTrajectory },
         { "time grid snapping", testTimeGrid },
         { "velocity per stroke", testVelocity },
+        { "key, scale and pitch magnet", testTuning },
+        { "smoothing", testSmoothing },
         { "undo history", testUndoHistory },
         { "preview synth plays drawn pitch (Hz)", testPreviewSynthPlaysDrawnPitch },
         { "MPE config messages", testMpeConfigMessages },

@@ -10,7 +10,9 @@ and the plugin drives an **external synthesizer** over MIDI using MPE or pitch b
 
 ## Features
 
-- Pencil, Select and Eraser tools; Shift snaps the pencil to semitones; the eraser cuts strokes apart.
+- Pencil, Line, Select and Eraser tools; Shift snaps the pencil to semitones; the eraser cuts strokes apart.
+- **Drawing aids:** pencil smoothing against hand jitter, a Line tool for clean held notes and glides, a Smooth
+  command, and a **pitch magnet** that pulls toward the notes of a chosen key and scale while keeping glides smooth.
 - Zoom and scroll in time and pitch.
 - **Velocity per stroke**: set it for new strokes, or select strokes and change theirs; line thickness shows it.
 - **Snap to a time grid** (1 bar … 1/32, triplets): note starts, lengths, moves and eraser cuts land on the grid, while pitch stays free.
@@ -47,6 +49,10 @@ The plugin ends up in `build/PitchPaint_artefacts/Release/VST3/PitchPaint.vst3`.
 | Action | How |
 |---|---|
 | Draw | Pencil (P): drag. Shift: snap to semitones. Drawing back over a stroke redraws that part. |
+| Draw straight | Line (L): click to place points; straight segments between them (flat = steady note, slanted = glide). Double-click, Enter or right-click finishes; Esc cancels. Points follow the time grid. |
+| Steady the pencil | **Smoothing** (default 40%): filters hand jitter in pitch while you draw; timing is never smoothed. Big, deliberate moves still follow quickly. |
+| Smooth existing strokes | Select them, then **Smooth** (M). Press again for more; start and end pitches stay. |
+| Key, scale, magnet | **Key** + **Scale** (chromatic, major, minor, modes, pentatonics, blues, whole tone) and **Magnet** (0–100%). The magnet pulls pitches toward the scale's notes as they play, so held notes settle in tune and glides stay continuous. It doesn't change what you drew, so you can adjust it any time. Shift snaps to scale notes; out-of-scale rows are shaded. |
 | Snap timing | **Snap** box (default 1/16; G turns it on/off). Stroke starts and ends land on grid lines, so note lengths are whole grid steps; with snapping on, a click places a one-step note. Hold Alt to ignore the grid for one action. |
 | Erase | Eraser (E), or right-drag with any tool: cuts out the part of a stroke it passes over (a cut in the middle leaves two strokes). Hold Shift to delete whole strokes. |
 | Select / move | Select (S): click, Shift-click, or drag a box. Drag a selected stroke to move; Shift moves by whole semitones. |

@@ -9,7 +9,7 @@
 class PitchCanvas final : public juce::Component, private juce::Timer
 {
 public:
-    enum class Tool { pencil, select, eraser };
+    enum class Tool { pencil, line, select, eraser };
 
     explicit PitchCanvas (PitchPaintProcessor&);
 
@@ -22,13 +22,19 @@ public:
     // Short feedback after an edit (shown in the footer and announced to screen readers).
     std::function<void (const juce::String&)> onStatus;
 
-    void setTool (Tool t) { tool = t; }
+    void setTool (Tool);                 // switching away from Line finishes the line being drawn
     Tool getTool() const { return tool; }
 
     void selectAll();
     void clearSelection();
     void deleteSelection();
     void nudgeSelection (double deltaBeats, double deltaPitch); // keyboard moves, one undo step each
+    void smoothSelection();                                      // one more step of smoothing, one undo step
+
+    // Line tool: clicks add points; finish with double-click, Enter or right-click; Esc cancels.
+    bool isDrawingLine() const { return lineId != 0; }
+    void finishLine();
+    void cancelLine();
     void setSelectionVelocity (int velocity, bool live);        // live: no undo step (caller wraps a gesture)
     static float strokeWidth (int velocity);                    // line thickness shows velocity
 
@@ -70,6 +76,9 @@ private:
     void report (const juce::String&);
 
     std::vector<juce::Line<float>> segmentsOf (const pitchpaint::Trajectory&) const;
+    std::vector<juce::Point<float>> screenPoints (const pitchpaint::Trajectory&) const; // as heard (magnet applied)
+    pitchpaint::PitchPoint linePointAt (juce::Point<float>, const juce::ModifierKeys&) const;
+    void lineClick (const juce::MouseEvent&);
     bool sweepHits (const pitchpaint::Trajectory&, juce::Line<float> swept, float radius) const;
     std::uint32_t trajectoryAt (juce::Point<float>) const; // 0 if none
     bool isSelected (std::uint32_t id) const;
@@ -82,7 +91,11 @@ private:
     double topPitch = 96.0;
     bool showWholeLoop = true;      // visible time range; follows loop-length changes while showing the whole loop
     double viewStart = 0.0, viewLength = 16.0;
-    std::optional<juce::Point<float>> hoverPos; // for the eraser circle
+    std::optional<juce::Point<float>> hoverPos; // for the eraser circle and the line preview
+    juce::ModifierKeys hoverMods;
+    std::uint32_t lineId = 0;                   // line being built with the Line tool
+    double smoothedPitch = 0.0;                 // pencil smoothing state
+    juce::Point<float> lastDrawPos;
 
     Drag drag = Drag::none;
     juce::Point<float> dragStart;

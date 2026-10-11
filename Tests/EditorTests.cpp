@@ -32,11 +32,11 @@ struct FakePlayHead final : juce::AudioPlayHead
     }
 };
 
-juce::MouseEvent makeEvent (juce::Component& c, juce::Point<float> pos, juce::Point<float> downPos, juce::ModifierKeys mods)
+juce::MouseEvent makeEvent (juce::Component& c, juce::Point<float> pos, juce::Point<float> downPos, juce::ModifierKeys mods, int clicks = 1)
 {
     const auto now = juce::Time::getCurrentTime();
     return { juce::Desktop::getInstance().getMainMouseSource(), pos, mods, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f,
-             &c, &c, now, downPos, now, 1, pos != downPos };
+             &c, &c, now, downPos, now, clicks, pos != downPos };
 }
 
 void drag (juce::Component& c, std::vector<juce::Point<float>> path, juce::ModifierKeys mods = juce::ModifierKeys::leftButtonModifier)
@@ -157,6 +157,7 @@ int main (int argc, char** argv)
     // New instances snap to 1/16. Steps 1-12 test free drawing, so turn snapping off; step 13 tests snapping.
     CHECK (proc.getGridBeats() == 0.25);
     proc.setGridIndex (0);
+    proc.setDrawSmoothing (0); // likewise: exact drawing first, smoothing in step 15
 
     // 1. Draw a rising glide from beat 1 (C4) to beat 5 (E4 + 30 cents), then a separate, overlapping wiggle.
     std::vector<juce::Point<float>> glide;
@@ -518,9 +519,143 @@ int main (int argc, char** argv)
         }
     }
 
+    // 15. Drawing aids: pencil smoothing, the Line tool, key/scale/magnet, and the Smooth command.
+    {
+        const auto roughness = [] (const pitchpaint::Trajectory& t)
+        {
+            // Mean absolute second difference of pitch, sampled evenly (independent of how many points were stored).
+            const int n = 200;
+            const double h = (t.endBeat() - t.startBeat()) / n;
+            double sum = 0.0;
+            for (int i = 1; i < n; ++i)
+                sum += std::abs (t.pitchAt (t.startBeat() + (i + 1) * h) - 2.0 * t.pitchAt (t.startBeat() + i * h)
+                                 + t.pitchAt (t.startBeat() + (i - 1) * h));
+            return sum / n;
+        };
+        const auto jitteryPath = [&] (double pitch)
+        {
+            std::vector<juce::Point<float>> path;
+            unsigned seed = 7;
+            for (int i = 0; i <= 200; ++i)
+            {
+                seed = seed * 1103515245u + 12345u;
+                const double jitter = ((seed >> 16) % 1000) / 1000.0 * 0.8 - 0.4; // +-0.4 semitones of hand shake
+                path.push_back (at (*canvas, L, 1.0 + i * 0.02, pitch + jitter));
+            }
+            return path;
+        };
+
+        proc.setGridIndex (0);
+        CHECK (press (juce::KeyPress ('p')));
+
+        // Smoothing: the same shaky hand, raw vs 80%.
+        proc.setDrawSmoothing (0);
+        drag (*canvas, jitteryPath (40.0));
+        const auto raw = proc.getPattern().trajectories.back();
+        proc.setDrawSmoothing (80);
+        drag (*canvas, jitteryPath (44.0));
+        const auto smooth = proc.getPattern().trajectories.back();
+        CHECK (roughness (smooth) < roughness (raw) * 0.3);
+        std::printf ("[info] smoothing: roughness raw %.4f, 80%% %.4f\n", roughness (raw), roughness (smooth));
+
+        // ...but a deliberate glide still ends where aimed (adaptive lag).
+        proc.setDrawSmoothing (40);
+        std::vector<juce::Point<float>> glidePath;
+        for (int i = 0; i <= 40; ++i)
+            glidePath.push_back (at (*canvas, L, 6.0 + i * 0.05, 40.0 + i * 0.15)); // 40 -> 46 over 2 beats
+        drag (*canvas, glidePath);
+        const auto glided = proc.getPattern().trajectories.back();
+        CHECK (std::abs (glided.points.back().pitch - 46.0) < 0.5);
+        std::printf ("[info] smoothed glide ends at %.3f (aimed 46)\n", glided.points.back().pitch);
+
+        // Line tool on a 1/16 grid: hold, glide, hold; double-click finishes; the line is one undo step.
+        proc.setGridIndex (5);
+        CHECK (press (juce::KeyPress ('l')));
+        const auto beforeLine = proc.getPattern();
+        const auto click = [&] (double beat, double pitch, int clicks = 1)
+        {
+            const auto pos = at (*canvas, L, beat, pitch);
+            canvas->mouseDown (makeEvent (*canvas, pos, pos, juce::ModifierKeys::leftButtonModifier, clicks));
+            canvas->mouseUp (makeEvent (*canvas, pos, pos, juce::ModifierKeys::leftButtonModifier, clicks));
+        };
+        click (9.1, 70.2);
+        click (10.0, 70.2);
+        click (10.3, 74.0);
+        click (12.0, 74.0);
+        click (12.0, 74.0, 2); // second click of a double-click
+        CHECK (! canvas->isDrawingLine());
+        const auto& line = proc.getPattern().trajectories.back();
+        std::vector<double> beats;
+        for (const auto& pt : line.points)
+            beats.push_back (pt.beat);
+        CHECK (beats == std::vector<double> ({ 9.0, 10.0, 10.25, 12.0 }));
+        CHECK (std::abs (line.pitchAt (9.5) - line.pitchAt (9.0)) < 1e-9);  // flat: a steady note
+        CHECK (line.pitchAt (10.25) > line.pitchAt (10.0) + 3.0);          // then a glide up
+        proc.undo();
+        CHECK (proc.getPattern() == beforeLine);
+
+        // Esc cancels a line in progress, leaving nothing (and no undo step).
+        click (13.0, 60.0);
+        click (14.0, 62.0);
+        CHECK (canvas->isDrawingLine());
+        CHECK (press (juce::KeyPress (juce::KeyPress::escapeKey)));
+        CHECK (! canvas->isDrawingLine() && proc.getPattern() == beforeLine);
+
+        // Key / scale / magnet through the toolbar: C major, magnet 100%. One undo step each.
+        juce::ComboBox* keyBox = nullptr;
+        juce::ComboBox* scaleBox = nullptr;
+        juce::Slider* magnet = nullptr;
+        for (auto* child : editor->getChildren())
+        {
+            if (auto* b = dynamic_cast<juce::ComboBox*> (child); b != nullptr && b->getTitle() == "Key") keyBox = b;
+            if (auto* b = dynamic_cast<juce::ComboBox*> (child); b != nullptr && b->getTitle() == "Scale") scaleBox = b;
+            if (auto* sl = dynamic_cast<juce::Slider*> (child); sl != nullptr && sl->getTitle() == "Pitch magnet") magnet = sl;
+        }
+        CHECK (keyBox != nullptr && scaleBox != nullptr && magnet != nullptr);
+        if (keyBox != nullptr && scaleBox != nullptr && magnet != nullptr)
+        {
+            keyBox->setSelectedId (1, juce::sendNotificationSync);   // C
+            scaleBox->setSelectedId (2, juce::sendNotificationSync); // Major
+            magnet->setValue (100, juce::sendNotificationSync);
+            CHECK (proc.getPattern().tuning == (pitchpaint::Tuning { 0, 1, 1.0 }));
+
+            // Shift-snap goes to scale notes now: F# (66.3) is not in C major, so it snaps to G.
+            proc.setDrawSmoothing (0);
+            CHECK (press (juce::KeyPress ('p')));
+            drag (*canvas, { at (*canvas, L, 13.0, 66.3), at (*canvas, L, 14.0, 66.3) },
+                  juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | juce::ModifierKeys::shiftModifier));
+            CHECK (proc.getPattern().trajectories.back().points.front().pitch == 67.0);
+
+            saveSnapshot (8);
+
+            proc.undo(); // the snapped stroke
+            proc.undo(); // magnet
+            CHECK (proc.getPattern().tuning.magnet == 0.0 && proc.getPattern().tuning.scale == 1);
+        }
+
+        // Smooth command on the raw jittery stroke: much less rough, ends kept, one undo step.
+        proc.setGridIndex (0);
+        CHECK (press (juce::KeyPress ('s')));
+        canvas->clearSelection();
+        drag (*canvas, { at (*canvas, L, 3.0, raw.pitchAt (3.0)) });
+        CHECK (canvas->getSelection() == std::vector<std::uint32_t> { raw.id });
+        const auto beforeSmooth = proc.getPattern();
+        CHECK (press (juce::KeyPress ('m')));
+        CHECK (press (juce::KeyPress ('m')));
+        const pitchpaint::Trajectory* smoothed = nullptr;
+        for (const auto& t : proc.getPattern().trajectories)
+            if (t.id == raw.id)
+                smoothed = &t;
+        CHECK (smoothed != nullptr && roughness (*smoothed) < roughness (raw) * 0.3);
+        CHECK (smoothed != nullptr && smoothed->points.front().pitch == raw.points.front().pitch);
+        proc.undo();
+        proc.undo();
+        CHECK (proc.getPattern() == beforeSmooth);
+    }
+
     // 12. Narrow window: the toolbar wraps instead of overlapping, everything stays inside, the canvas keeps space.
     {
-        editor->setSize (560, 400);
+        editor->setSize (560, 460); // the minimum size
         juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
         std::vector<juce::Rectangle<int>> boxes;
         for (auto* child : editor->getChildren())

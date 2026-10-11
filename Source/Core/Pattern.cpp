@@ -85,6 +85,40 @@ void snapEnds (Trajectory& t, double step, double maxBeat)
     t.points = std::move (points);
 }
 
+void smoothTrajectory (Trajectory& t, double sigma)
+{
+    if (! t.isPlayable() || sigma <= 0.0)
+        return;
+
+    const double start = t.startBeat(), end = t.endBeat();
+    const double step = std::max (sigma / 4.0, 1.0 / 512.0);
+    const int n = std::max (2, (int) std::ceil ((end - start) / step) + 1);
+    const double h = (end - start) / (n - 1);
+
+    std::vector<double> raw ((size_t) n);
+    for (int i = 0; i < n; ++i)
+        raw[(size_t) i] = t.pitchAt (start + i * h);
+
+    // Gaussian over +-3 sigma, renormalised where the window runs past the ends.
+    const int radius = (int) std::ceil (3.0 * sigma / h);
+    std::vector<PitchPoint> points ((size_t) n);
+    for (int i = 0; i < n; ++i)
+    {
+        double sum = 0.0, weight = 0.0;
+        for (int k = std::max (0, i - radius); k <= std::min (n - 1, i + radius); ++k)
+        {
+            const double d = (k - i) * h / sigma;
+            const double w = std::exp (-0.5 * d * d);
+            sum += w * raw[(size_t) k];
+            weight += w;
+        }
+        points[(size_t) i] = { start + i * h, sum / weight };
+    }
+    points.front().pitch = raw.front(); // keep where the note starts and lands
+    points.back() = { end, raw.back() };
+    t.points = std::move (points);
+}
+
 void cutTrajectory (Pattern& p, std::uint32_t id, double fromBeat, double toBeat, double minLength)
 {
     const auto it = std::find_if (p.trajectories.begin(), p.trajectories.end(), [id] (const Trajectory& t) { return t.id == id; });
@@ -163,8 +197,9 @@ void moveTrajectories (Pattern& p, const std::vector<std::uint32_t>& ids, double
 
 namespace
 {
-    // Version 2 adds "v <velocity>" after the id. Version 1 (no velocity) still loads, with the default velocity.
-    constexpr const char* header = "PitchPaintPattern 2";
+    // Version 2 added "v <velocity>" after the id, version 3 the "tuning <key> <scale> <magnet>" line.
+    // Older versions still load, with defaults for what they lack.
+    constexpr const char* header = "PitchPaintPattern 3";
 
     void appendNumber (std::string& s, double v)
     {
@@ -179,6 +214,8 @@ std::string serialise (const Pattern& p)
     std::string s = header;
     s += "\nlength ";
     appendNumber (s, p.lengthBeats);
+    s += "\ntuning " + std::to_string (p.tuning.key) + ' ' + std::to_string (p.tuning.scale) + ' ';
+    appendNumber (s, p.tuning.magnet);
 
     for (const auto& t : p.trajectories)
     {
@@ -224,12 +261,25 @@ std::optional<Pattern> parsePattern (const std::string& text)
 
     const auto magic = word();
     const auto version = word();
-    if (magic != "PitchPaintPattern" || (version != "1" && version != "2") || word() != "length")
+    if (magic != "PitchPaintPattern" || (version != "1" && version != "2" && version != "3") || word() != "length")
         return std::nullopt;
 
     Pattern p;
     if (! number (p.lengthBeats) || p.lengthBeats <= 0.0)
         return std::nullopt;
+
+    if (const char* lineStart = pos; word() == "tuning")
+    {
+        double key = 0.0, scale = 0.0, magnet = 0.0;
+        if (! number (key) || ! number (scale) || ! number (magnet)
+            || key < 0.0 || key > 11.0 || scale < 0.0 || scale >= (double) scales.size() || magnet < 0.0 || magnet > 1.0)
+            return std::nullopt;
+        p.tuning = { (int) key, (int) scale, magnet };
+    }
+    else
+    {
+        pos = lineStart; // not a tuning line: the trajectories start here
+    }
 
     for (skipSpace(); pos < end; skipSpace())
     {

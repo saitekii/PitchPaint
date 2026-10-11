@@ -74,6 +74,7 @@ private:
     std::array<Voice, maxMemberChannels> voices {};
     std::uint64_t counter = 0;
     std::vector<int> evalPoints;
+    Tuning tuning; // of the pattern being rendered
 };
 
 } // namespace pitchpaint

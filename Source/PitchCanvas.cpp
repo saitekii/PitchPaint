@@ -93,7 +93,7 @@ pitchpaint::PitchPoint PitchCanvas::pointAt (juce::Point<float> pos, bool snapTo
     const auto area = plotArea();
     const double beat = juce::jlimit (0.0, processor.getPattern().lengthBeats, xToBeat (pos.x));
     double pitch = topPitch - (double) (pos.y - area.getY()) / area.getHeight() * (topPitch - bottomPitch);
-    pitch = juce::jlimit (0.0, 127.0, snapToSemitone ? std::round (pitch) : pitch);
+    pitch = juce::jlimit (0.0, 127.0, snapToSemitone ? processor.getPattern().tuning.nearestScaleNote (pitch) : pitch);
     return { beat, pitch };
 }
 
@@ -112,6 +112,22 @@ void PitchCanvas::paint (juce::Graphics& g)
     {
         g.setColour (colour::textPrimary.withAlpha (0.6f));
         g.drawEllipse (juce::Rectangle<float> (2.0f * eraseRadius, 2.0f * eraseRadius).withCentre (*hoverPos), 1.0f);
+    }
+
+    if (lineId != 0 && hoverPos)
+    {
+        for (const auto& t : pattern.trajectories)
+            if (t.id == lineId && ! t.points.empty())
+            {
+                const auto& last = t.points.back();
+                const auto next = linePointAt (*hoverPos, hoverMods);
+                const juce::Point<float> a { beatToX (last.beat), pitchToY (pattern.tuning.apply (last.pitch)) };
+                const juce::Point<float> b { beatToX (next.beat), pitchToY (pattern.tuning.apply (next.pitch)) };
+                const float dashes[] = { 5.0f, 4.0f };
+                g.setColour (colour::forStroke (t.id).withAlpha (0.8f));
+                g.drawDashedLine ({ a, b }, dashes, 2, 1.5f);
+                g.fillEllipse (juce::Rectangle<float> (6.0f, 6.0f).withCentre (b));
+            }
     }
 
     paintStatus (g, pattern);
@@ -215,10 +231,18 @@ void PitchCanvas::paintGrid (juce::Graphics& g, const pitchpaint::Pattern& patte
     {
         const float y = pitchToY (n);
 
-        if (isBlackKey (n))
+        const auto& tuning = pattern.tuning;
+        const bool chromatic = tuning.scale == 0;
+        const auto row = juce::Rectangle<float> (area.getX(), y - pxPerSemitone * 0.5f, area.getWidth(), pxPerSemitone);
+        if (chromatic ? isBlackKey (n) : ! tuning.inScale (n))
         {
             g.setColour (colour::blackKeyRow);
-            g.fillRect (juce::Rectangle<float> (area.getX(), y - pxPerSemitone * 0.5f, area.getWidth(), pxPerSemitone));
+            g.fillRect (row);
+        }
+        if (! chromatic && ((n - tuning.key) % 12 + 12) % 12 == 0)
+        {
+            g.setColour (colour::accent.withAlpha (0.07f)); // the key's root notes
+            g.fillRect (row);
         }
 
         const bool isC = n % 12 == 0;
@@ -272,17 +296,17 @@ void PitchCanvas::paintTrajectories (juce::Graphics& g, const pitchpaint::Patter
         const float width = strokeWidth (t.velocity) + (selected ? 0.5f : 0.0f);
         g.setColour (colour::forStroke (t.id));
 
-        if (t.points.size() == 1)
+        const auto pts = screenPoints (t);
+        if (pts.size() == 1)
         {
-            const juce::Point<float> p { beatToX (t.points[0].beat), pitchToY (t.points[0].pitch) };
-            g.fillEllipse (juce::Rectangle<float> (4.0f, 4.0f).withCentre (p));
+            g.fillEllipse (juce::Rectangle<float> (4.0f, 4.0f).withCentre (pts[0]));
             continue;
         }
 
         juce::Path path;
-        path.startNewSubPath (beatToX (t.points[0].beat), pitchToY (t.points[0].pitch));
-        for (size_t i = 1; i < t.points.size(); ++i)
-            path.lineTo (beatToX (t.points[i].beat), pitchToY (t.points[i].pitch));
+        path.startNewSubPath (pts[0]);
+        for (size_t i = 1; i < pts.size(); ++i)
+            path.lineTo (pts[i]);
 
         if (selected)
         {
@@ -297,7 +321,7 @@ void PitchCanvas::paintTrajectories (juce::Graphics& g, const pitchpaint::Patter
             // Velocity value next to the start of each selected stroke.
             const auto text = "vel " + juce::String (t.velocity);
             const juce::Font font (theme::type::caption());
-            const auto start = juce::Point<float> { beatToX (t.points[0].beat), pitchToY (t.points[0].pitch) };
+            const auto start = pts[0];
             const float chipWidth = juce::GlyphArrangement::getStringWidth (font, text) + 2.0f * theme::space::xs;
             const auto chip = juce::Rectangle<float> (start.x, start.y - 6.0f - 16.0f, chipWidth, 16.0f);
             g.setColour (colour::surface.withAlpha (0.9f));
@@ -335,7 +359,7 @@ void PitchCanvas::paintPlayhead (juce::Graphics& g, const pitchpaint::Pattern& p
         if (! t.isPlayable() || beat < t.startBeat() || beat >= t.endBeat())
             continue;
 
-        const juce::Point<float> p { x, pitchToY (t.pitchAt (beat)) };
+        const juce::Point<float> p { x, pitchToY (pattern.tuning.apply (t.pitchAt (beat))) };
         g.setColour (colour::forStroke (t.id));
         g.fillEllipse (juce::Rectangle<float> (10.0f, 10.0f).withCentre (p));
         g.setColour (colour::playhead);
@@ -386,15 +410,37 @@ void PitchCanvas::timerCallback()
 std::vector<juce::Line<float>> PitchCanvas::segmentsOf (const pitchpaint::Trajectory& t) const
 {
     std::vector<juce::Line<float>> lines;
-    if (t.points.size() == 1)
-    {
-        const juce::Point<float> a { beatToX (t.points[0].beat), pitchToY (t.points[0].pitch) };
-        lines.push_back ({ a, a });
-    }
-    for (size_t i = 0; i + 1 < t.points.size(); ++i)
-        lines.push_back ({ { beatToX (t.points[i].beat), pitchToY (t.points[i].pitch) },
-                           { beatToX (t.points[i + 1].beat), pitchToY (t.points[i + 1].pitch) } });
+    const auto pts = screenPoints (t);
+    if (pts.size() == 1)
+        lines.push_back ({ pts[0], pts[0] });
+    for (size_t i = 0; i + 1 < pts.size(); ++i)
+        lines.push_back ({ pts[i], pts[i + 1] });
     return lines;
+}
+
+std::vector<juce::Point<float>> PitchCanvas::screenPoints (const pitchpaint::Trajectory& t) const
+{
+    // Points as heard: the pitch magnet bends even straight segments, so sample those every few pixels.
+    const auto& tuning = processor.getPattern().tuning;
+    const auto at = [&] (double beat, double pitch) { return juce::Point<float> { beatToX (beat), pitchToY (tuning.apply (pitch)) }; };
+
+    std::vector<juce::Point<float>> pts;
+    for (size_t i = 0; i < t.points.size(); ++i)
+    {
+        const auto& b = t.points[i];
+        if (i > 0 && tuning.magnet > 0.0)
+        {
+            const auto& a = t.points[i - 1];
+            const int n = juce::jlimit (1, 512, (int) (std::abs (beatToX (b.beat) - beatToX (a.beat)) / 3.0f));
+            for (int k = 1; k < n; ++k)
+            {
+                const double f = (double) k / n;
+                pts.push_back (at (a.beat + (b.beat - a.beat) * f, a.pitch + (b.pitch - a.pitch) * f));
+            }
+        }
+        pts.push_back (at (b.beat, b.pitch));
+    }
+    return pts;
 }
 
 bool PitchCanvas::sweepHits (const pitchpaint::Trajectory& t, juce::Line<float> swept, float radius) const
@@ -457,6 +503,17 @@ void PitchCanvas::deleteSelection()
 //==============================================================================
 void PitchCanvas::mouseDown (const juce::MouseEvent& e)
 {
+    if (lineId != 0 && e.mods.isRightButtonDown())
+    {
+        finishLine(); // right-click ends a line
+        return;
+    }
+    if (tool == Tool::line && ! e.mods.isRightButtonDown())
+    {
+        lineClick (e);
+        return;
+    }
+
     dragStart = e.position;
     processor.beginGesture();
 
@@ -501,6 +558,8 @@ void PitchCanvas::mouseDown (const juce::MouseEvent& e)
     drag = Drag::drawing;
     auto pattern = processor.getPattern();
     lastPoint = pointAt (e.position, e.mods.isShiftDown());
+    smoothedPitch = lastPoint.pitch;
+    lastDrawPos = e.position;
     if (const double grid = gridStep (e.mods); grid > 0.0)
         lastPoint.beat = juce::jlimit (0.0, processor.getPattern().lengthBeats, pitchpaint::snapBeat (lastPoint.beat, grid));
     drawingId = pattern.nextId();
@@ -565,7 +624,18 @@ void PitchCanvas::mouseDrag (const juce::MouseEvent& e)
 
         case Drag::drawing:
         {
-            const auto point = pointAt (e.position, e.mods.isShiftDown());
+            // Smoothing: the drawn pitch follows the mouse with a lag measured in distance moved (not time), so hand
+            // jitter is filtered at any drawing speed. The lag shrinks as the gap to the mouse grows, so small jitter is
+            // smoothed hard while deliberate glides catch up and end where aimed. Timing is never smoothed.
+            auto point = pointAt (e.position, false);
+            const float moved = lastDrawPos.getDistanceFrom (e.position);
+            lastDrawPos = e.position;
+            const double amount = processor.getDrawSmoothing() / 100.0;
+            const double gapPx = std::abs (pitchToY (point.pitch) - pitchToY (smoothedPitch)) / 6.0;
+            const double lag = amount * 40.0 / (1.0 + gapPx * gapPx);
+            const double follow = lag > 0.0 ? 1.0 - std::exp (-moved / lag) : 1.0;
+            smoothedPitch += (point.pitch - smoothedPitch) * follow;
+            point.pitch = e.mods.isShiftDown() ? processor.getPattern().tuning.nearestScaleNote (smoothedPitch) : smoothedPitch;
             if (point.beat == lastPoint.beat && point.pitch == lastPoint.pitch)
                 break;
 
@@ -587,6 +657,9 @@ void PitchCanvas::mouseDrag (const juce::MouseEvent& e)
 
 void PitchCanvas::mouseUp (const juce::MouseEvent& e)
 {
+    if (tool == Tool::line && drag == Drag::none)
+        return; // a line stays open across clicks; finishLine() ends its gesture
+
     if (drag == Drag::drawing)
     {
         auto pattern = processor.getPattern();
@@ -668,8 +741,97 @@ void PitchCanvas::eraseAlong (juce::Point<float> from, juce::Point<float> to, bo
 void PitchCanvas::mouseMove (const juce::MouseEvent& e)
 {
     hoverPos = e.position;
-    if (tool == Tool::eraser)
+    hoverMods = e.mods;
+    if (tool == Tool::eraser || lineId != 0)
         repaint();
+}
+
+//==============================================================================
+pitchpaint::PitchPoint PitchCanvas::linePointAt (juce::Point<float> pos, const juce::ModifierKeys& mods) const
+{
+    auto pt = pointAt (pos, mods.isShiftDown());
+    if (const double grid = gridStep (mods); grid > 0.0)
+        pt.beat = juce::jlimit (0.0, processor.getPattern().lengthBeats, pitchpaint::snapBeat (pt.beat, grid));
+    return pt;
+}
+
+void PitchCanvas::lineClick (const juce::MouseEvent& e)
+{
+    const auto pt = linePointAt (e.position, e.mods);
+    auto pattern = processor.getPattern();
+
+    if (lineId == 0)
+    {
+        processor.beginGesture(); // the whole line is one undo step
+        lineId = pattern.nextId();
+        pattern.trajectories.push_back ({ lineId, { pt }, processor.getNewStrokeVelocity() });
+        processor.setPattern (std::move (pattern));
+        repaint();
+        return;
+    }
+
+    if (e.getNumberOfClicks() >= 2)
+    {
+        finishLine();
+        return;
+    }
+
+    for (auto& t : pattern.trajectories)
+        if (t.id == lineId && pt.beat > t.endBeat() + 1.0e-9) // points must move forward in time
+        {
+            t.points.push_back (pt);
+            processor.setPattern (std::move (pattern));
+            break;
+        }
+    repaint();
+}
+
+void PitchCanvas::finishLine()
+{
+    if (lineId == 0)
+        return;
+    auto pattern = processor.getPattern();
+    const auto removed = std::erase_if (pattern.trajectories, [this] (const auto& t) { return t.id == lineId && ! t.isPlayable(); });
+    if (removed > 0)
+        processor.setPattern (std::move (pattern));
+    processor.endGesture();
+    if (removed == 0)
+        report ("Line added. Ctrl+Z to undo.");
+    lineId = 0;
+    repaint();
+}
+
+void PitchCanvas::cancelLine()
+{
+    if (lineId == 0)
+        return;
+    auto pattern = processor.getPattern();
+    std::erase_if (pattern.trajectories, [this] (const auto& t) { return t.id == lineId; });
+    processor.setPattern (std::move (pattern));
+    processor.endGesture(); // back to where it started: no undo step
+    lineId = 0;
+    repaint();
+}
+
+void PitchCanvas::setTool (Tool t)
+{
+    if (t != Tool::line)
+        finishLine();
+    tool = t;
+    repaint();
+}
+
+void PitchCanvas::smoothSelection()
+{
+    if (selection.empty())
+        return;
+    auto pattern = processor.getPattern();
+    for (auto& t : pattern.trajectories)
+        if (isSelected (t.id))
+            pitchpaint::smoothTrajectory (t, 1.0 / 32.0);
+    processor.applyEdit (std::move (pattern));
+    report ("Smoothed " + strokes ((int) selection.size()) + ". Press again for more; Ctrl+Z to undo.");
+    repaint();
 }
 
 void PitchCanvas::mouseExit (const juce::MouseEvent&)

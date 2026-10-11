@@ -66,6 +66,10 @@ public:
     void setGridIndex (int index) { gridIndex.store (juce::jlimit (0, (int) std::size (gridDivisions) - 1, index)); }
     double getGridBeats() const { return gridDivisions[getGridIndex()].beats; }
 
+    // Pencil smoothing while drawing, 0..100 % (pitch only). Saved with the project.
+    int getDrawSmoothing() const { return drawSmoothing.load(); }
+    void setDrawSmoothing (int percent) { drawSmoothing.store (juce::jlimit (0, 100, percent)); }
+
     // Velocity given to newly drawn strokes (each stroke keeps its own). Saved with the project.
     int getNewStrokeVelocity() const { return newStrokeVelocity.load(); }
     void setNewStrokeVelocity (int v) { newStrokeVelocity.store (juce::jlimit (1, 127, v)); }
@@ -81,6 +85,7 @@ private:
     int patternVersion = 0;
     std::atomic<int> gridIndex { defaultGridIndex };
     std::atomic<int> newStrokeVelocity { pitchpaint::Trajectory::defaultVelocity };
+    std::atomic<int> drawSmoothing { 40 };
     pitchpaint::UndoHistory history;
     std::optional<pitchpaint::Pattern> gestureStart;
     pitchpaint::PatternSnapshots snapshots;

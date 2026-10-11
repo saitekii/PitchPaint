@@ -5,7 +5,7 @@ using namespace theme;
 namespace
 {
     constexpr juce::uint32 statusMillis = 4000;
-    const juce::String shortcutsHint ("Shift: snap pitch | Alt: ignore grid | G: snap on/off | Ctrl+Z/Y | Ctrl/Shift/Alt+wheel: zoom/scroll");
+    const juce::String shortcutsHint ("P/L/S/E: tools | Shift: snap pitch | Alt: ignore grid | G: snap | M: smooth | Ctrl+Z/Y");
 }
 
 PitchPaintEditor::PitchPaintEditor (PitchPaintProcessor& p)
@@ -14,12 +14,15 @@ PitchPaintEditor::PitchPaintEditor (PitchPaintProcessor& p)
     setLookAndFeel (&lookAndFeel);
 
     // Tools: one active at a time (radio group); the active one uses the accent colour and bold text.
-    for (auto* b : { &pencilButton, &selectButton, &eraserButton })
+    for (auto* b : { &pencilButton, &lineButton, &selectButton, &eraserButton })
     {
         b->setClickingTogglesState (true);
         b->setRadioGroupId (1);
     }
     pencilButton.onClick = [this] { selectTool (PitchCanvas::Tool::pencil); };
+    lineButton.onClick = [this] { selectTool (PitchCanvas::Tool::line); };
+    lineButton.setTooltip ("Line (L): click to place points joined by straight lines: flat = steady note, slanted = "
+                           "clean glide. Double-click, Enter or right-click finishes; Esc cancels.");
     selectButton.onClick = [this] { selectTool (PitchCanvas::Tool::select); };
     eraserButton.onClick = [this] { selectTool (PitchCanvas::Tool::eraser); };
     pencilButton.setToggleState (true, juce::dontSendNotification);
@@ -28,6 +31,64 @@ PitchPaintEditor::PitchPaintEditor (PitchPaintProcessor& p)
                              "drag or use the arrow keys to move; Shift-drag moves by whole semitones.");
     eraserButton.setTooltip ("Erase (E): cuts out what it passes over. Hold Shift to delete whole strokes. "
                              "Right-drag erases with any tool.");
+
+    smoothButton.onClick = [this] { canvas.smoothSelection(); };
+    smoothButton.setTooltip ("Smooth the selected strokes (M). Press again for more. Start and end pitches stay.");
+
+    smoothingSlider.setRange (0.0, 100.0, 1.0);
+    smoothingSlider.setTextValueSuffix ("%");
+    smoothingSlider.setTextBoxStyle (juce::Slider::TextBoxLeft, false, 52, controlHeight);
+    smoothingSlider.setTitle ("Pencil smoothing");
+    smoothingSlider.setTooltip ("Steadies the pencil's pitch while you draw, so hand jitter doesn't become wobble. "
+                                "Timing is never smoothed. 0% = raw mouse.");
+    smoothingSlider.onValueChange = [this]
+    {
+        processor.setDrawSmoothing (juce::roundToInt (smoothingSlider.getValue()));
+        if (! smoothingSlider.isMouseButtonDown())
+            showStatus ("Pencil smoothing " + juce::String (processor.getDrawSmoothing()) + "%.");
+    };
+
+    for (int i = 0; i < 12; ++i)
+        keyBox.addItem (juce::MidiMessage::getMidiNoteName (i, true, false, 4), i + 1);
+    keyBox.setTitle ("Key");
+    keyBox.setTooltip ("Root note of the scale the magnet and Shift-snap use.");
+    keyBox.onChange = [this]
+    {
+        auto t = processor.getPattern().tuning;
+        t.key = keyBox.getSelectedId() - 1;
+        setTuning (t, false);
+    };
+    for (int i = 0; i < (int) pitchpaint::scales.size(); ++i)
+        scaleBox.addItem (juce::String (pitchpaint::scales[(size_t) i].name.data(), pitchpaint::scales[(size_t) i].name.size()), i + 1);
+    scaleBox.setTitle ("Scale");
+    scaleBox.setTooltip ("Notes the magnet pulls toward and Shift snaps to. Notes outside the scale are shaded.");
+    scaleBox.onChange = [this]
+    {
+        auto t = processor.getPattern().tuning;
+        t.scale = scaleBox.getSelectedId() - 1;
+        setTuning (t, false);
+    };
+
+    magnetSlider.setRange (0.0, 100.0, 1.0);
+    magnetSlider.setTextValueSuffix ("%");
+    magnetSlider.setTextBoxStyle (juce::Slider::TextBoxLeft, false, 52, controlHeight);
+    magnetSlider.setIncDecButtonsMode (juce::Slider::incDecButtonsDraggable_Vertical);
+    magnetSlider.setTitle ("Pitch magnet");
+    magnetSlider.setTooltip ("Pulls pitches toward the scale's notes as they play: held notes settle in tune, glides stay "
+                             "smooth. Doesn't change what you drew, so you can adjust it any time. 0% = off.");
+    magnetSlider.onDragStart = [this] { magnetGesture = true; processor.beginGesture(); };
+    magnetSlider.onValueChange = [this]
+    {
+        auto t = processor.getPattern().tuning;
+        t.magnet = magnetSlider.getValue() / 100.0;
+        setTuning (t, magnetGesture);
+    };
+    magnetSlider.onDragEnd = [this]
+    {
+        magnetGesture = false;
+        processor.endGesture(); // one undo step per drag / press
+        showStatus (tuningDescription());
+    };
 
     undoButton.onClick = [this] { undo(); };
     redoButton.onClick = [this] { redo(); };
@@ -78,7 +139,7 @@ PitchPaintEditor::PitchPaintEditor (PitchPaintProcessor& p)
     previewAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (processor.params, "preview", previewToggle);
     previewToggle.setTooltip ("Built-in sound that plays exactly what is drawn. Use it to check your synth's pitch.");
 
-    for (auto* label : { &lengthLabel, &snapLabel, &velocityLabel, &modeLabel, &rangeLabel })
+    for (auto* label : { &smoothingLabel, &keyLabel, &scaleLabel, &magnetLabel, &lengthLabel, &snapLabel, &velocityLabel, &modeLabel, &rangeLabel })
     {
         label->setFont (juce::Font (type::caption()));
         label->setColour (juce::Label::textColourId, colour::textSecondary);
@@ -87,6 +148,10 @@ PitchPaintEditor::PitchPaintEditor (PitchPaintProcessor& p)
     }
     lengthLabel.attachToComponent (&lengthBox, true); // also links the label for assistive technology
     snapLabel.attachToComponent (&snapBox, true);
+    smoothingLabel.attachToComponent (&smoothingSlider, true);
+    keyLabel.attachToComponent (&keyBox, true);
+    scaleLabel.attachToComponent (&scaleBox, true);
+    magnetLabel.attachToComponent (&magnetSlider, true);
     velocityLabel.attachToComponent (&velocitySlider, true);
     modeLabel.attachToComponent (&modeBox, true);
     rangeLabel.attachToComponent (&rangeSlider, true);
@@ -103,8 +168,10 @@ PitchPaintEditor::PitchPaintEditor (PitchPaintProcessor& p)
     // doesn't take keyboard focus, so shortcuts keep working and focus rings appear only for keyboard use.
     setFocusContainerType (FocusContainerType::keyboardFocusContainer);
     int order = 1;
-    for (auto* c : std::initializer_list<juce::Component*> { &pencilButton, &selectButton, &eraserButton, &undoButton, &redoButton,
-                                                             &lengthBox, &snapBox, &velocitySlider, &modeBox, &rangeSlider, &previewToggle, &canvas })
+    for (auto* c : std::initializer_list<juce::Component*> { &pencilButton, &lineButton, &selectButton, &eraserButton, &undoButton,
+                                                             &redoButton, &smoothButton, &smoothingSlider, &lengthBox, &snapBox,
+                                                             &keyBox, &scaleBox, &magnetSlider, &velocitySlider, &modeBox,
+                                                             &rangeSlider, &previewToggle, &canvas })
     {
         c->setExplicitFocusOrder (order++);
         if (c != &canvas)
@@ -119,7 +186,7 @@ PitchPaintEditor::PitchPaintEditor (PitchPaintProcessor& p)
 
     setWantsKeyboardFocus (true);
     setResizable (true, true);
-    setResizeLimits (560, 360, 3000, 2000);
+    setResizeLimits (560, 460, 3000, 2000);
     setSize (1300, 640);
 }
 
@@ -132,6 +199,7 @@ void PitchPaintEditor::selectTool (PitchCanvas::Tool tool)
 {
     canvas.setTool (tool);
     pencilButton.setToggleState (tool == PitchCanvas::Tool::pencil, juce::dontSendNotification);
+    lineButton.setToggleState (tool == PitchCanvas::Tool::line, juce::dontSendNotification);
     selectButton.setToggleState (tool == PitchCanvas::Tool::select, juce::dontSendNotification);
     eraserButton.setToggleState (tool == PitchCanvas::Tool::eraser, juce::dontSendNotification);
     if (tool != PitchCanvas::Tool::select)
@@ -191,6 +259,33 @@ void PitchPaintEditor::velocityGestureEnded()
                 + ". Ctrl+Z to undo.");
 }
 
+void PitchPaintEditor::setTuning (pitchpaint::Tuning tuning, bool live)
+{
+    auto pattern = processor.getPattern();
+    if (pattern.tuning == tuning)
+        return;
+    pattern.tuning = tuning;
+    if (live)
+        processor.setPattern (std::move (pattern)); // inside a gesture
+    else
+    {
+        processor.applyEdit (std::move (pattern));
+        showStatus (tuningDescription() + " Ctrl+Z to undo.");
+    }
+    canvas.repaint();
+}
+
+juce::String PitchPaintEditor::tuningDescription() const
+{
+    const auto& t = processor.getPattern().tuning;
+    const auto& scale = pitchpaint::scales[(size_t) t.scale].name;
+    const auto scaleName = juce::String (scale.data(), scale.size());
+    const auto key = t.scale == 0 ? juce::String() : juce::MidiMessage::getMidiNoteName (t.key, true, false, 4) + " ";
+    if (t.magnet <= 0.0)
+        return "Magnet off; Shift snaps to " + key + scaleName + ".";
+    return "Magnet " + juce::String (juce::roundToInt (t.magnet * 100.0)) + "% toward " + key + scaleName + ".";
+}
+
 void PitchPaintEditor::undo()
 {
     if (! processor.canUndo())
@@ -226,6 +321,14 @@ void PitchPaintEditor::refresh()
 {
     lengthBox.setSelectedId (juce::roundToInt (processor.getPattern().lengthBeats / 4.0), juce::dontSendNotification);
     snapBox.setSelectedId (processor.getGridIndex() + 1, juce::dontSendNotification);
+    const auto& tuning = processor.getPattern().tuning;
+    keyBox.setSelectedId (tuning.key + 1, juce::dontSendNotification);
+    scaleBox.setSelectedId (tuning.scale + 1, juce::dontSendNotification);
+    if (! magnetGesture)
+        magnetSlider.setValue (juce::roundToInt (tuning.magnet * 100.0), juce::dontSendNotification);
+    if (! smoothingSlider.isMouseButtonDown (true))
+        smoothingSlider.setValue (processor.getDrawSmoothing(), juce::dontSendNotification);
+    smoothButton.setEnabled (! canvas.getSelection().empty());
 
     // The velocity field edits the selection when there is one, otherwise the velocity for new strokes.
     const auto& selection = canvas.getSelection();
@@ -298,7 +401,10 @@ bool PitchPaintEditor::keyPressed (const juce::KeyPress& key)
     }
 
     if (code == juce::KeyPress::deleteKey || code == juce::KeyPress::backspaceKey) canvas.deleteSelection();
-    else if (code == juce::KeyPress::escapeKey) canvas.clearSelection();
+    else if (code == juce::KeyPress::escapeKey) { if (canvas.isDrawingLine()) canvas.cancelLine(); else canvas.clearSelection(); }
+    else if (code == juce::KeyPress::returnKey) canvas.finishLine();
+    else if (ch == 'l') selectTool (PitchCanvas::Tool::line);
+    else if (ch == 'm') canvas.smoothSelection();
     else if (ch == 'p' || ch == 'b') selectTool (PitchCanvas::Tool::pencil);
     else if (ch == 's' || ch == 'v') selectTool (PitchCanvas::Tool::select);
     else if (ch == 'e') selectTool (PitchCanvas::Tool::eraser);
@@ -329,9 +435,12 @@ std::vector<std::vector<PitchPaintEditor::Item>> PitchPaintEditor::toolbarGroups
 
     // Attached labels sit left of their control: reserve their width as a spacer before the control.
     return {
-        { { &pencilButton, 64 }, { &selectButton, 64 }, { &eraserButton, 64 } },
-        { { &undoButton, 54 }, { &redoButton, 54 } },
+        { { &pencilButton, 64 }, { &lineButton, 56 }, { &selectButton, 64 }, { &eraserButton, 64 } },
+        { { &undoButton, 54 }, { &redoButton, 54 }, { &smoothButton, 66 } },
+        { { nullptr, labelWidth (smoothingLabel) }, { &smoothingSlider, 112 } },
         { { nullptr, labelWidth (lengthLabel) }, { &lengthBox, 88 }, { nullptr, labelWidth (snapLabel) }, { &snapBox, 80 } },
+        { { nullptr, labelWidth (keyLabel) }, { &keyBox, 64 }, { nullptr, labelWidth (scaleLabel) }, { &scaleBox, 148 },
+          { nullptr, labelWidth (magnetLabel) }, { &magnetSlider, 112 } },
         { { nullptr, labelWidth (velocityLabel) }, { &velocitySlider, 104 } },
         { { nullptr, labelWidth (modeLabel) }, { &modeBox, 140 }, { nullptr, labelWidth (rangeLabel) }, { &rangeSlider, 104 } },
         { { &previewToggle, 92 } },

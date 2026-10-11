@@ -79,6 +79,8 @@ void MidiRenderer::render (const Pattern& pattern, double ppqStart, double beats
     if (length <= 0.0 || beatsPerSample <= 0.0)
         return;
 
+    tuning = pattern.tuning;
+
     // Evaluate at every step boundary, plus exactly where a trajectory starts or ends and where the loop wraps,
     // so note timing is sample-accurate while bends are updated every stepSamples.
     for (int s0 = 0; s0 < numSamples; s0 += stepSamples)
@@ -204,7 +206,7 @@ void MidiRenderer::syncMono (const Pattern& pattern, double beat, int sample, Mi
 
 void MidiRenderer::startVoice (Voice& v, int channel, const Trajectory& t, double beat, int sample, MidiOut& out)
 {
-    const double pitch = t.pitchAt (beat);
+    const double pitch = tuning.apply (t.pitchAt (beat)); // with the pitch magnet
 
     // The note number is the semitone nearest to where the curve starts, so the attack is in tune and the note
     // shown by the host/synth matches the drawing even if the synth applies a different bend range than ours.
@@ -221,7 +223,7 @@ void MidiRenderer::startVoice (Voice& v, int channel, const Trajectory& t, doubl
 
 void MidiRenderer::updateVoice (Voice& v, int channel, const Trajectory& t, double beat, int sample, MidiOut& out)
 {
-    const double pitch = t.pitchAt (beat);
+    const double pitch = tuning.apply (t.pitchAt (beat)); // with the pitch magnet
     const double offset = pitch - v.note;
 
     if (std::abs (offset) > settings.bendRange)

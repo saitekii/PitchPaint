@@ -33,9 +33,10 @@ label is bold.
 
 ## Layout
 
-- **Toolbar:** groups in reading order: Tools | Edit | Loop + Snap | Velocity | Output + Bend range | Preview. Groups wrap onto
+- **Toolbar:** groups in reading order: Tools (Pencil, Line, Select, Eraser) | Edit (Undo, Redo, Smooth) | Smoothing |
+  Loop + Snap | Key + Scale + Magnet | Velocity | Output + Bend range | Preview. Groups wrap onto
   another row when the window is narrow and never overlap. The default window is 1300 × 640, where everything
-  fits on one row; the minimum is 560 × 360.
+  fits in two rows; the minimum is 560 × 460, which keeps the canvas at least ~220 px tall.
 - **Canvas:** fills the remaining space. Time zoom/scroll: Ctrl+wheel and Shift+wheel. Pitch zoom/scroll: Alt+wheel and the wheel.
 - **Footer:**
   - Left: the persistent synth-setup line, which is never truncated and moves to its own row if needed.
@@ -66,7 +67,7 @@ label is bold.
 - **Keyboard:**
   - Tab reaches every toolbar control in reading order, then the canvas.
   - Clicking a toolbar control doesn't steal focus, so focus rings appear for keyboard use only.
-  - Shortcuts: P / S / E for tools, G for snap on/off, Ctrl+Z / Ctrl+Y, Ctrl+A, Delete, Esc.
+  - Shortcuts: P / L / S / E for tools, G for snap on/off, M to smooth the selection, Enter / Esc to finish / cancel a line, Ctrl+Z / Ctrl+Y, Ctrl+A, Delete, Esc.
   - Arrow keys move the selection (Alt for fine steps).
 - **Screen readers:** every control has an accessible name. Drop-downs and the bend-range field are linked to
   their visible labels. The canvas has a title, help text, and a live description such as "3 strokes in a 4-bar
@@ -78,6 +79,8 @@ label is bold.
 
 - **Canvas grid lines** have low contrast on purpose, so the drawn strokes stay the focal point. Octave lines and
   note labels are higher contrast, and Shift-snapping gives exact semitones without reading the grid.
+- **Pitch magnet near midpoints.** The magnet is continuous (no jumps), so a pitch exactly halfway between two
+  scale notes stays there and small movements near it are amplified. Use Shift-snap for such notes.
 - **Drawing needs a pointer.** Free-hand curves have no sensible keyboard equivalent. Editing existing strokes
   (select all, move, delete, undo) works from the keyboard.
 - **Control height is 28 px**, below the ~44 px touch guidance. PitchPaint is a desktop plugin used with a mouse,

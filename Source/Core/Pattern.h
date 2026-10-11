@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Tuning.h"
+
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -42,6 +44,7 @@ struct Pattern
 {
     double lengthBeats = 16.0;
     std::vector<Trajectory> trajectories;
+    Tuning tuning; // key, scale and pitch magnet applied when playing
 
     std::uint32_t nextId() const;
     bool operator== (const Pattern&) const = default;
@@ -54,6 +57,10 @@ double snapBeat (double beat, double step);
 // Moves a trajectory's start and end to the nearest grid lines so its length is a whole number of steps (at least one),
 // staying within [0, maxBeat]. The curve in between is kept; where an end moves outward, the end pitch is held.
 void snapEnds (Trajectory&, double step, double maxBeat);
+
+// Smooths a trajectory's pitch with a Gaussian of the given width (in beats). Its start, end and their pitches are kept.
+// The curve is resampled evenly, so repeated smoothing keeps working on hand-drawn and sparse strokes alike.
+void smoothTrajectory (Trajectory&, double sigmaBeats);
 
 // Removes the time range [fromBeat, toBeat] from a trajectory (split eraser). The parts on either side remain, with
 // end points interpolated exactly at the cut: the left part keeps the id, the right part gets a new one.

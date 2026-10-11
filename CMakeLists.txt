@@ -16,7 +16,8 @@ FetchContent_MakeAvailable(JUCE)
 add_library(PitchPaintCore STATIC
     Source/Core/Pattern.cpp
     Source/Core/MidiRenderer.cpp
-    Source/Core/PreviewSynth.cpp)
+    Source/Core/PreviewSynth.cpp
+    Source/Core/Tuning.cpp)
 target_include_directories(PitchPaintCore PUBLIC Source)
 if(MSVC)
     target_compile_options(PitchPaintCore PRIVATE /W4)

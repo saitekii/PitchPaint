@@ -29,6 +29,8 @@ private:
     void setLoopBars (int bars);
     void setGrid (int index);
     void velocityChanged();
+    void setTuning (pitchpaint::Tuning, bool live);
+    juce::String tuningDescription() const;
     void velocityGestureEnded();
     int lastGridIndex = PitchPaintProcessor::defaultGridIndex; // what G turns snapping back on to
     void undo();
@@ -41,8 +43,14 @@ private:
     PitchCanvas canvas;
     juce::TooltipWindow tooltipWindow { this, 600 };
 
-    juce::TextButton pencilButton { "Pencil" }, selectButton { "Select" }, eraserButton { "Eraser" };
-    juce::TextButton undoButton { "Undo" }, redoButton { "Redo" };
+    juce::TextButton pencilButton { "Pencil" }, lineButton { "Line" }, selectButton { "Select" }, eraserButton { "Eraser" };
+    juce::TextButton undoButton { "Undo" }, redoButton { "Redo" }, smoothButton { "Smooth" };
+    juce::Label smoothingLabel { {}, "Smoothing" };
+    juce::Slider smoothingSlider { juce::Slider::IncDecButtons, juce::Slider::TextBoxLeft };
+    juce::Label keyLabel { {}, "Key" }, scaleLabel { {}, "Scale" }, magnetLabel { {}, "Magnet" };
+    juce::ComboBox keyBox, scaleBox;
+    juce::Slider magnetSlider { juce::Slider::IncDecButtons, juce::Slider::TextBoxLeft };
+    bool magnetGesture = false;
     juce::Label lengthLabel { {}, "Loop" }, snapLabel { {}, "Snap" }, modeLabel { {}, "Output" }, rangeLabel { {}, "Bend range" };
     juce::ComboBox lengthBox, snapBox, modeBox;
     juce::Slider rangeSlider { juce::Slider::IncDecButtons, juce::Slider::TextBoxLeft };
