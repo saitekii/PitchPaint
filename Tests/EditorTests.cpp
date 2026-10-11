@@ -866,9 +866,98 @@ int main (int argc, char** argv)
         }
     }
 
+    // 18. Dynamics lane: shapes and drawing apply to the selected strokes (one undo step each); Send switches on
+    //     the first time; playback sends pressure; the lane can be hidden.
+    {
+        const auto settle = [] { juce::MessageManager::getInstance()->runDispatchLoopUntil (80); };
+        DynamicsLane* lane = nullptr;
+        for (auto* child : editor->getChildren())
+            if (auto* l = dynamic_cast<DynamicsLane*> (child))
+                lane = l;
+        CHECK (lane != nullptr && lane->isVisible());
+        if (lane != nullptr)
+        {
+            // Select one stroke.
+            const auto target = proc.getPattern().trajectories.front();
+            CHECK (press (juce::KeyPress ('s')));
+            canvas->clearSelection();
+            drag (*canvas, { at (*canvas, L, target.startBeat() + 0.01, target.pitchAt (target.startBeat() + 0.01)) });
+            settle();
+            CHECK (canvas->getSelection() == std::vector<std::uint32_t> { target.id });
+            CHECK (proc.params.getRawParameterValue ("dynamics")->load() == 0.0f); // Send starts Off
+
+            // Swell preset: the stroke gets louder over its length; Send switches to Pressure (MPE mode).
+            const auto beforeSwell = proc.getPattern();
+            lane->applyShape (pitchpaint::DynamicsShape::swell);
+            const auto& swelled = proc.getPattern().trajectories.front();
+            CHECK (pitchpaint::dynamicsAt (swelled, swelled.startBeat()) < 0.3 && pitchpaint::dynamicsAt (swelled, swelled.endBeat()) == 1.0);
+            CHECK ((int) proc.params.getRawParameterValue ("dynamics")->load() == (int) pitchpaint::DynamicsOutput::pressure);
+            saveSnapshot (12);
+
+            // Playback sends channel pressure on the stroke's channel, rising through the note.
+            int pressureMessages = 0;
+            {
+                juce::AudioBuffer<float> audio (2, 512);
+                juce::MidiBuffer midi;
+                head.ppq = swelled.startBeat() - 0.1;
+                while (head.ppq < swelled.endBeat())
+                {
+                    proc.processBlock (audio, midi);
+                    for (const auto m : midi)
+                        pressureMessages += m.getMessage().isChannelPressure() ? 1 : 0;
+                    head.ppq += 512 * 2.0 / 48000.0;
+                }
+            }
+            CHECK (pressureMessages > 10);
+
+            proc.undo();
+            CHECK (proc.getPattern() == beforeSwell);
+
+            // Draw in the lane: a drag across the stroke's span from loud to soft (one undo step).
+            const auto laneArea = lane->getLocalBounds().toFloat().withTrimmedTop (36.0f).withTrimmedLeft (40.0f).reduced (0.0f, 4.0f);
+            const auto laneX = [&] (double beat)
+            {
+                const auto view = canvas->getVisibleBeats();
+                return laneArea.getX() + (float) ((beat - view.getStart()) / view.getLength()) * laneArea.getWidth();
+            };
+            const float yLoud = laneArea.getY() + 2.0f, ySoft = laneArea.getBottom() - laneArea.getHeight() * 0.2f;
+            const double s0 = target.startBeat(), s1 = target.endBeat();
+            const juce::Point<float> a { laneX (s0 + 0.1 * (s1 - s0)), yLoud }, b { laneX (s0 + 0.9 * (s1 - s0)), ySoft };
+            lane->mouseDown (makeEvent (*lane, a, a, juce::ModifierKeys::leftButtonModifier));
+            lane->mouseDrag (makeEvent (*lane, (a + b) * 0.5f, a, juce::ModifierKeys::leftButtonModifier));
+            lane->mouseDrag (makeEvent (*lane, b, a, juce::ModifierKeys::leftButtonModifier));
+            lane->mouseUp (makeEvent (*lane, b, a, juce::ModifierKeys::leftButtonModifier));
+            const auto& drawn = proc.getPattern().trajectories.front();
+            const double early = pitchpaint::dynamicsAt (drawn, s0 + 0.15 * (s1 - s0));
+            const double late = pitchpaint::dynamicsAt (drawn, s0 + 0.85 * (s1 - s0));
+            CHECK (early > 0.85 && late < 0.35 && early > late);
+            std::printf ("[info] lane drawing: level %.2f early, %.2f late\n", early, late);
+            proc.undo();
+            CHECK (proc.getPattern() == beforeSwell);
+
+            // Hiding the lane gives the canvas the space back and lowers the minimum height again.
+            juce::Button* dynamicsButton = nullptr;
+            for (auto* child : editor->getChildren())
+                if (auto* bt = dynamic_cast<juce::Button*> (child); bt != nullptr && bt->getButtonText() == "Dynamics")
+                    dynamicsButton = bt;
+            CHECK (dynamicsButton != nullptr && dynamicsButton->getToggleState());
+            if (dynamicsButton != nullptr)
+            {
+                const int canvasHeight = canvas->getHeight();
+                dynamicsButton->setToggleState (false, juce::sendNotificationSync);
+                dynamicsButton->onClick();
+                CHECK (! lane->isVisible() && canvas->getHeight() == canvasHeight + DynamicsLane::preferredHeight);
+                dynamicsButton->setToggleState (true, juce::sendNotificationSync);
+                dynamicsButton->onClick();
+                CHECK (lane->isVisible());
+            }
+            proc.params.getParameter ("dynamics")->setValueNotifyingHost (0.0f);
+        }
+    }
+
     // 12. Narrow window: the toolbar wraps instead of overlapping, everything stays inside, the canvas keeps space.
     {
-        editor->setSize (560, 480); // the minimum size
+        editor->setSize (560, 480 + DynamicsLane::preferredHeight); // the minimum size with the dynamics lane shown
         juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
         std::vector<juce::Rectangle<int>> boxes;
         for (auto* child : editor->getChildren())

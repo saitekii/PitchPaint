@@ -632,8 +632,8 @@ void PitchCanvas::mouseDrag (const juce::MouseEvent& e)
             const float moved = lastDrawPos.getDistanceFrom (e.position);
             lastDrawPos = e.position;
             const double amount = processor.getDrawSmoothing() / 100.0;
-            const double gapPx = std::abs (pitchToY (point.pitch) - pitchToY (smoothedPitch)) / 6.0;
-            const double lag = amount * 40.0 / (1.0 + gapPx * gapPx);
+            const double gapPx = std::abs (pitchToY (point.pitch) - pitchToY (smoothedPitch)) / 4.0;
+            const double lag = amount * 30.0 / (1.0 + gapPx * gapPx);
             const double follow = lag > 0.0 ? 1.0 - std::exp (-moved / lag) : 1.0;
             smoothedPitch += (point.pitch - smoothedPitch) * follow;
             point.pitch = e.mods.isShiftDown() ? processor.getPattern().tuning.nearestScaleNote (smoothedPitch) : smoothedPitch;

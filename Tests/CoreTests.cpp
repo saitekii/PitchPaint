@@ -141,7 +141,7 @@ void testSerialiseRoundTrip()
 
     CHECK (parsePattern (serialise (Pattern {})) == Pattern {});
     CHECK (! parsePattern ("").has_value());
-    CHECK (! parsePattern ("PitchPaintPattern 5\nlength 4\n").has_value());              // unknown future version
+    CHECK (! parsePattern ("PitchPaintPattern 6\nlength 4\n").has_value());              // unknown future version
 
     // Tuning round-trips; a malformed tuning line is rejected; version 2 (no tuning) loads with the default.
     Pattern tuned = p;
@@ -457,6 +457,127 @@ void testClipboard()
     const auto& a = p.trajectories[5];
     const auto& b = p.trajectories[6];
     CHECK (b.endBeat() == 8.0 && a.startBeat() == 5.0 && b.startBeat() - a.startBeat() == 2.0);
+}
+
+void testDynamics()
+{
+    // Envelope basics: empty = full; interpolation; drawing overwrites between beats like the pencil.
+    Envelope e;
+    CHECK (e.valueAt (3.0) == 1.0);
+    drawEnvelopeSegment (e, { 0.0, 0.2 }, { 0.0, 0.2 });
+    drawEnvelopeSegment (e, { 0.0, 0.2 }, { 2.0, 1.0 });
+    CHECK (std::abs (e.valueAt (1.0) - 0.6) < 1e-12 && e.valueAt (5.0) == 1.0 && e.valueAt (-1.0) == 0.2);
+    drawEnvelopeSegment (e, { 2.0, 1.0 }, { 0.5, 1.7 }); // backwards; value clamped to 1
+    CHECK (e.points.size() == 3 && e.valueAt (0.5) == 1.0);
+
+    // Presets: swell rises, fade falls, hairpin peaks in the middle, accent starts high then settles.
+    const auto swell = makeDynamicsShape (DynamicsShape::swell, 4.0);
+    const auto fade = makeDynamicsShape (DynamicsShape::fade, 4.0);
+    const auto hairpin = makeDynamicsShape (DynamicsShape::hairpin, 4.0);
+    const auto accent = makeDynamicsShape (DynamicsShape::accent, 4.0);
+    CHECK (swell.valueAt (0.0) < 0.3 && swell.valueAt (4.0) == 1.0);
+    CHECK (fade.valueAt (0.0) == 1.0 && fade.valueAt (4.0) < 0.3);
+    CHECK (hairpin.valueAt (2.0) > hairpin.valueAt (0.0) + 0.6 && hairpin.valueAt (2.0) > hairpin.valueAt (4.0) + 0.6);
+    CHECK (accent.valueAt (0.0) == 1.0 && accent.valueAt (3.0) < 0.6);
+
+    // A stroke at beats 2..6 with a swell: dynamics follow it relative to the stroke start.
+    Pattern p;
+    p.lengthBeats = 8.0;
+    Trajectory t = line (1, 2.0, 60.0, 6.0, 60.0);
+    t.dynamics = swell;
+    p.trajectories.push_back (t);
+    CHECK (dynamicsAt (t, 2.0) == swell.valueAt (0.0) && dynamicsAt (t, 6.0) == 1.0);
+
+    // Saved/loaded exactly; version 4 loads without dynamics.
+    CHECK (parsePattern (serialise (p)) == p);
+    const auto v4 = parsePattern ("PitchPaintPattern 4\nlength 4\ntuning 0 0 0\nt 1 v 100 0 60 1 60\n");
+    CHECK (v4.has_value() && v4->trajectories[0].dynamics.empty());
+
+    // Moving keeps it with the stroke (relative beats); cutting re-bases the right part, continuous at the cut.
+    moveTrajectories (p, { 1 }, 1.0, 0.0);
+    CHECK (dynamicsAt (p.trajectories[0], 3.0) == swell.valueAt (0.0));
+    const double levelAt5 = dynamicsAt (p.trajectories[0], 5.0);
+    cutTrajectory (p, 1, 4.5, 5.0);
+    CHECK (p.trajectories.size() == 2 && std::abs (dynamicsAt (p.trajectories[1], 5.0) - levelAt5) < 1e-9);
+    CHECK (std::abs (dynamicsAt (p.trajectories[1], 7.0) - 1.0) < 1e-9);
+
+    // Snapping the ends keeps dynamics where they were in absolute time.
+    Trajectory s = line (2, 0.9, 60.0, 3.0, 60.0);
+    s.dynamics = swell;
+    const double before = dynamicsAt (s, 2.0);
+    snapEnds (s, 1.0, 8.0);
+    CHECK (s.startBeat() == 1.0 && std::abs (dynamicsAt (s, 2.0) - before) < 1e-9);
+
+    // Renderer: off sends nothing; pressure goes before the note-on and follows the curve, only on change.
+    Pattern one;
+    one.lengthBeats = 8.0;
+    Trajectory n = line (1, 1.0, 60.0, 5.0, 60.0);
+    n.dynamics = swell;
+    one.trajectories.push_back (n);
+    const auto countDynamics = [] (const std::vector<Absolute>& ev, int type, int cc)
+    {
+        int count = 0;
+        for (const auto& a : ev)
+            if ((a.event.bytes[0] & 0xF0) == type && (type == 0xD0 || a.event.bytes[1] == cc))
+                ++count;
+        return count;
+    };
+    {
+        MidiRenderer r;
+        MidiOut setup;
+        r.configure ({ OutputMode::mpe, 48 }, setup, 0);
+        const auto ev = renderAll (r, one, beatToSample (6.0), 512);
+        CHECK (countDynamics (ev, 0xD0, 0) == 0);
+    }
+    {
+        MidiRenderer r;
+        MidiOut setup;
+        r.configure ({ OutputMode::mpe, 48, 15, DynamicsOutput::pressure }, setup, 0);
+        const auto ev = renderAll (r, one, beatToSample (6.0), 512);
+        size_t onIndex = 0;
+        while (onIndex < ev.size() && ! isNoteOn (ev[onIndex].event)) ++onIndex;
+        CHECK (onIndex >= 1 && (ev[onIndex - 1].event.bytes[0] & 0xF0) == 0xD0 && ev[onIndex - 1].event.size == 2);
+        CHECK (ev[onIndex - 1].event.bytes[1] == (std::uint8_t) std::lround (swell.valueAt (0.0) * 127.0));
+        int last = -1, count = 0;
+        bool rising = true;
+        for (const auto& a : ev)
+            if ((a.event.bytes[0] & 0xF0) == 0xD0)
+            {
+                rising = rising && a.event.bytes[1] > last; // only sent when it changes; a swell only goes up
+                last = a.event.bytes[1];
+                ++count;
+            }
+        CHECK (rising && last == 127 && count > 10 && count < 128);
+    }
+    {
+        MidiRenderer r;
+        MidiOut setup;
+        r.configure ({ OutputMode::mono, 12, 15, DynamicsOutput::cc11 }, setup, 0);
+        const auto ev = renderAll (r, one, beatToSample (6.0), 512);
+        CHECK (countDynamics (ev, 0xB0, 11) > 10);
+        // Switching dynamics off resets CC11 to its resting value (127) so the synth isn't left quiet.
+        MidiOut out;
+        r.configure ({ OutputMode::mono, 12 }, out, 0);
+        bool reset = false;
+        for (const auto& m : out)
+            reset = reset || ((m.bytes[0] & 0xF0) == 0xB0 && m.bytes[1] == 11 && m.bytes[2] == 127);
+        CHECK (reset);
+    }
+
+    // Preview: pressure changes the level of a sounding note (smoothly).
+    PreviewSynth synth;
+    synth.prepare (sampleRate);
+    std::vector<float> l (14400, 0.0f), r (14400, 0.0f);
+    MidiOut events { { 0, { 0x91, 69, 127 } }, { 4800, { 0xD1, 32, 0 }, 2 } };
+    synth.process (events, 48, l.data(), r.data(), 14400);
+    const auto rms = [&] (int from, int to)
+    {
+        double sum = 0.0;
+        for (int i = from; i < to; ++i)
+            sum += l[(size_t) i] * l[(size_t) i];
+        return std::sqrt (sum / (to - from));
+    };
+    CHECK (std::abs (rms (9600, 14400) / rms (2400, 4800) - 32.0 / 127.0) < 0.02);
 }
 
 void testTimeGrid()
@@ -874,6 +995,7 @@ int main()
         { "smoothing", testSmoothing },
         { "vibrato", testVibrato },
         { "copy / paste", testClipboard },
+        { "dynamics", testDynamics },
         { "undo history", testUndoHistory },
         { "preview synth plays drawn pitch (Hz)", testPreviewSynthPlaysDrawnPitch },
         { "MPE config messages", testMpeConfigMessages },

@@ -3,6 +3,7 @@
 #include "LookAndFeel.h"
 #include "PitchCanvas.h"
 #include "PluginProcessor.h"
+#include "DynamicsLane.h"
 #include "VibratoPanel.h"
 
 class PitchPaintEditor final : public juce::AudioProcessorEditor, private juce::Timer
@@ -27,6 +28,7 @@ private:
 
     void timerCallback() override;
     void selectTool (PitchCanvas::Tool);
+    void updateSizeLimits();
     void setLoopBars (int bars);
     void setGrid (int index);
     void velocityChanged();
@@ -44,11 +46,12 @@ private:
     PitchPaintLookAndFeel lookAndFeel; // declared first: outlives every child component
     PitchPaintProcessor& processor;
     PitchCanvas canvas;
+    DynamicsLane dynamicsLane { processor, canvas };
     juce::TooltipWindow tooltipWindow { this, 600 };
 
     juce::TextButton pencilButton { "Pencil" }, lineButton { "Line" }, selectButton { "Select" }, eraserButton { "Eraser" };
     juce::TextButton undoButton { "Undo" }, redoButton { "Redo" }, smoothButton { "Smooth" };
-    juce::TextButton editMenuButton, vibratoButton { "Vibrato..." };
+    juce::TextButton editMenuButton, vibratoButton { "Vibrato..." }, dynamicsButton { "Dynamics" };
     juce::Label smoothingLabel { {}, "Smoothing" };
     juce::Slider smoothingSlider { juce::Slider::IncDecButtons, juce::Slider::TextBoxLeft };
     juce::Label keyLabel { {}, "Key" }, scaleLabel { {}, "Scale" }, magnetLabel { {}, "Magnet" };

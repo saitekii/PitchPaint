@@ -34,10 +34,12 @@ label is bold.
 ## Layout
 
 - **Toolbar:** groups in reading order: Tools (Pencil, Line, Select, Eraser) | Edit (Undo, Redo, Edit menu) |
-  Shape (Smooth, Vibrato...) | Smoothing |
+  Shape (Smooth, Vibrato..., Dynamics toggle) | Smoothing |
   Loop + Snap | Key + Scale + Magnet | Velocity | Output + Bend range | Preview. Groups wrap onto
   another row when the window is narrow and never overlap. The default window is 1300 × 640, where everything
   fits in two rows; the minimum is 560 × 480, which keeps the canvas at least ~200 px tall.
+- **Dynamics lane** (optional, 108 px): sits under the canvas and shares its time axis and gutter, so curves line up
+  with their strokes. Showing it raises the minimum window height by its own height, so the canvas keeps ~200 px.
 - **Canvas:** fills the remaining space. Time zoom/scroll: Ctrl+wheel and Shift+wheel. Pitch zoom/scroll: Alt+wheel and the wheel.
 - **Footer:**
   - Left: the persistent synth-setup line, which is never truncated and moves to its own row if needed.

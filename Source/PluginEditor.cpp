@@ -97,6 +97,16 @@ PitchPaintEditor::PitchPaintEditor (PitchPaintProcessor& p)
     editMenuButton.onClick = [this] { showEditMenu(); };
     vibratoButton.setTooltip ("Vibrato for the selected strokes, or for new strokes when nothing is selected.");
     vibratoButton.onClick = [this] { openVibratoPanel(); };
+    dynamicsButton.setClickingTogglesState (true);
+    dynamicsButton.setToggleState (processor.isDynamicsLaneShown(), juce::dontSendNotification);
+    dynamicsButton.setTooltip ("Show or hide the dynamics lane: loudness over time for the selected strokes.");
+    dynamicsButton.onClick = [this]
+    {
+        processor.setDynamicsLaneShown (dynamicsButton.getToggleState());
+        updateSizeLimits();
+        resized();
+    };
+    dynamicsLane.onStatus = [this] (const juce::String& s) { showStatus (s); };
 
     undoButton.onClick = [this] { undo(); };
     redoButton.onClick = [this] { redo(); };
@@ -177,7 +187,7 @@ PitchPaintEditor::PitchPaintEditor (PitchPaintProcessor& p)
     setFocusContainerType (FocusContainerType::keyboardFocusContainer);
     int order = 1;
     for (auto* c : std::initializer_list<juce::Component*> { &pencilButton, &lineButton, &selectButton, &eraserButton, &undoButton,
-                                                             &redoButton, &editMenuButton, &smoothButton, &vibratoButton,
+                                                             &redoButton, &editMenuButton, &smoothButton, &vibratoButton, &dynamicsButton,
                                                              &smoothingSlider, &lengthBox, &snapBox,
                                                              &keyBox, &scaleBox, &magnetSlider, &velocitySlider, &modeBox,
                                                              &rangeSlider, &previewToggle, &canvas })
@@ -187,6 +197,7 @@ PitchPaintEditor::PitchPaintEditor (PitchPaintProcessor& p)
             c->setMouseClickGrabsKeyboardFocus (false);
         addAndMakeVisible (c);
     }
+    addAndMakeVisible (dynamicsLane);
     addAndMakeVisible (synthHint);
     addAndMakeVisible (footerRight);
 
@@ -195,13 +206,22 @@ PitchPaintEditor::PitchPaintEditor (PitchPaintProcessor& p)
 
     setWantsKeyboardFocus (true);
     setResizable (true, true);
-    setResizeLimits (560, 480, 3000, 2000);
+    updateSizeLimits();
     setSize (1300, 640);
 }
 
 PitchPaintEditor::~PitchPaintEditor()
 {
     setLookAndFeel (nullptr);
+}
+
+void PitchPaintEditor::updateSizeLimits()
+{
+    // The canvas keeps at least ~200 px: the dynamics lane adds its height to the minimum while it's shown.
+    const int minHeight = 480 + (processor.isDynamicsLaneShown() ? DynamicsLane::preferredHeight : 0);
+    setResizeLimits (560, minHeight, 3000, 2000);
+    if (getHeight() > 0 && getHeight() < minHeight)
+        setSize (getWidth(), minHeight);
 }
 
 void PitchPaintEditor::selectTool (PitchCanvas::Tool tool)
@@ -547,6 +567,8 @@ void PitchPaintEditor::paint (juce::Graphics& g)
     }
     g.drawHorizontalLine (toolbarHeight - 1, 0.0f, (float) getWidth());
     g.drawHorizontalLine (getHeight() - footerHeight, 0.0f, (float) getWidth());
+    if (dynamicsLane.isVisible())
+        g.drawHorizontalLine (dynamicsLane.getY() - 1, 0.0f, (float) getWidth());
 }
 
 std::vector<std::vector<PitchPaintEditor::Item>> PitchPaintEditor::toolbarGroups()
@@ -558,7 +580,7 @@ std::vector<std::vector<PitchPaintEditor::Item>> PitchPaintEditor::toolbarGroups
     return {
         { { &pencilButton, 64 }, { &lineButton, 56 }, { &selectButton, 64 }, { &eraserButton, 64 } },
         { { &undoButton, 54 }, { &redoButton, 54 }, { &editMenuButton, 64 } },
-        { { &smoothButton, 66 }, { &vibratoButton, 84 } },
+        { { &smoothButton, 66 }, { &vibratoButton, 84 }, { &dynamicsButton, 84 } },
         { { nullptr, labelWidth (smoothingLabel) }, { &smoothingSlider, 112 } },
         { { nullptr, labelWidth (lengthLabel) }, { &lengthBox, 88 }, { nullptr, labelWidth (snapLabel) }, { &snapBox, 80 } },
         { { nullptr, labelWidth (keyLabel) }, { &keyBox, 64 }, { nullptr, labelWidth (scaleLabel) }, { &scaleBox, 148 },
@@ -632,6 +654,10 @@ void PitchPaintEditor::resized()
     synthHint.setMinimumHorizontalScale (oneRow ? 1.0f : 0.8f);
     footerRight.setMinimumHorizontalScale (0.8f);
 
-    canvas.setBounds (getLocalBounds().withTrimmedTop (toolbarHeight).withTrimmedBottom (footerHeight));
+    auto middle = getLocalBounds().withTrimmedTop (toolbarHeight).withTrimmedBottom (footerHeight);
+    dynamicsLane.setVisible (processor.isDynamicsLaneShown());
+    if (dynamicsLane.isVisible())
+        dynamicsLane.setBounds (middle.removeFromBottom (DynamicsLane::preferredHeight));
+    canvas.setBounds (middle);
     repaint();
 }

@@ -28,7 +28,8 @@ private:
         int channel = 0, note = 0;
         double phase = 0.0, freq = 0.0, targetFreq = 0.0;
         float env = 0.0f;
-        float level = 1.0f; // from note-on velocity
+        float level = 1.0f;    // from note-on velocity
+        float dynamics = 1.0f; // smoothed channel volume (pressure / CC11 / CC7)
         std::uint64_t started = 0;
     };
 
@@ -41,6 +42,8 @@ private:
     double glideCoef = 0.0;
     std::array<Voice, 32> voices {};
     std::array<int, 16> bend {};
+    std::array<float, 16> channelLevel {}; // target volume per channel, 0..1
+    float dynamicsCoef = 0.0f;
     std::uint64_t counter = 0;
 };
 

@@ -66,6 +66,10 @@ public:
     void setGridIndex (int index) { gridIndex.store (juce::jlimit (0, (int) std::size (gridDivisions) - 1, index)); }
     double getGridBeats() const { return gridDivisions[getGridIndex()].beats; }
 
+    // Whether the dynamics lane is shown under the canvas. Saved with the project.
+    bool isDynamicsLaneShown() const { return dynamicsLaneShown.load(); }
+    void setDynamicsLaneShown (bool shown) { dynamicsLaneShown.store (shown); }
+
     // Pencil smoothing while drawing, 0..100 % (pitch only). Saved with the project.
     int getDrawSmoothing() const { return drawSmoothing.load(); }
     void setDrawSmoothing (int percent) { drawSmoothing.store (juce::jlimit (0, 100, percent)); }
@@ -101,6 +105,7 @@ private:
     std::atomic<int> gridIndex { defaultGridIndex };
     std::atomic<int> newStrokeVelocity { pitchpaint::Trajectory::defaultVelocity };
     std::atomic<int> drawSmoothing { 40 };
+    std::atomic<bool> dynamicsLaneShown { true };
     std::atomic<double> newVibratoDepth { 0.0 }, newVibratoRate { 5.5 }, newVibratoFade { 0.5 };
     std::atomic<double> beatsPerSecond { 2.0 };
     pitchpaint::UndoHistory history;

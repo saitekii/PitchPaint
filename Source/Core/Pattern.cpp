@@ -39,6 +39,66 @@ std::uint32_t Pattern::nextId() const
     return id + 1;
 }
 
+double Envelope::valueAt (double beat) const
+{
+    if (points.empty())
+        return 1.0;
+    if (beat <= points.front().beat)
+        return points.front().value;
+    if (beat >= points.back().beat)
+        return points.back().value;
+    const auto next = std::upper_bound (points.begin(), points.end(), beat,
+                                        [] (double b, const EnvelopePoint& p) { return b < p.beat; });
+    const auto& b = *next;
+    const auto& a = *(next - 1);
+    return b.beat > a.beat ? a.value + (b.value - a.value) * (beat - a.beat) / (b.beat - a.beat) : b.value;
+}
+
+void Envelope::shift (double delta)
+{
+    for (auto& p : points)
+        p.beat += delta;
+}
+
+void drawEnvelopeSegment (Envelope& e, EnvelopePoint from, EnvelopePoint to)
+{
+    auto& pts = e.points;
+    to.value = std::clamp (to.value, 0.0, 1.0);
+    const double lo = std::min (from.beat, to.beat), hi = std::max (from.beat, to.beat);
+    pts.erase (std::remove_if (pts.begin(), pts.end(),
+                               [&] (const EnvelopePoint& p) { return (p.beat > lo && p.beat < hi) || p.beat == to.beat; }),
+               pts.end());
+    const auto pos = std::lower_bound (pts.begin(), pts.end(), to.beat,
+                                       [] (const EnvelopePoint& p, double b) { return p.beat < b; });
+    pts.insert (pos, to);
+}
+
+Envelope makeDynamicsShape (DynamicsShape shape, double length)
+{
+    // Sampled curves (16 segments) with gentle ease-in/out, the way a player shapes a note.
+    const auto ease = [] (double x) { return x * x * (3.0 - 2.0 * x); };
+    Envelope e;
+    for (int i = 0; i <= 16; ++i)
+    {
+        const double x = i / 16.0;
+        double v = 1.0;
+        switch (shape)
+        {
+            case DynamicsShape::swell:   v = 0.25 + 0.75 * ease (x); break;
+            case DynamicsShape::fade:    v = 1.0 - 0.8 * ease (x); break;
+            case DynamicsShape::hairpin: v = 0.3 + 0.7 * ease (x < 0.5 ? 2.0 * x : 2.0 - 2.0 * x); break;
+            case DynamicsShape::accent:  v = x < 0.15 ? 1.0 - 0.45 * ease (x / 0.15) : 0.55; break;
+        }
+        e.points.push_back ({ x * length, v });
+    }
+    return e;
+}
+
+double dynamicsAt (const Trajectory& t, double beat)
+{
+    return t.points.empty() ? 1.0 : std::clamp (t.dynamics.valueAt (beat - t.startBeat()), 0.0, 1.0);
+}
+
 void drawSegment (Trajectory& t, PitchPoint from, PitchPoint to)
 {
     auto& pts = t.points;
@@ -120,6 +180,7 @@ void snapEnds (Trajectory& t, double step, double maxBeat)
     }
     start = std::max (0.0, start);
 
+    t.dynamics.shift (t.startBeat() - start); // keep the dynamics where they were in absolute time
     std::vector<PitchPoint> points { { start, t.pitchAt (start) } }; // pitchAt holds the end pitch outside the curve
     for (const auto& pt : t.points)
         if (pt.beat > start && pt.beat < end)
@@ -175,7 +236,17 @@ void cutTrajectory (Pattern& p, std::uint32_t id, double fromBeat, double toBeat
     if (toBeat <= original.startBeat() || fromBeat >= original.endBeat())
         return; // no overlap
 
-    Trajectory left { original.id, {}, original.velocity, original.vibrato }, right { p.nextId(), {}, original.velocity, original.vibrato };
+    Trajectory left { original.id, {}, original.velocity, original.vibrato, original.dynamics },
+               right { p.nextId(), {}, original.velocity, original.vibrato, original.dynamics };
+    if (! right.dynamics.empty())
+    {
+        // Re-base to the right part's start, keeping its level at the cut.
+        const double offset = toBeat - original.startBeat();
+        const double atCut = original.dynamics.valueAt (offset);
+        right.dynamics.shift (-offset);
+        std::erase_if (right.dynamics.points, [] (const EnvelopePoint& e) { return e.beat <= 0.0; });
+        right.dynamics.points.insert (right.dynamics.points.begin(), { 0.0, atCut });
+    }
 
     if (fromBeat > original.startBeat())
     {
@@ -241,8 +312,9 @@ void moveTrajectories (Pattern& p, const std::vector<std::uint32_t>& ids, double
 namespace
 {
     // Version 2 added "v <velocity>" after the id, version 3 the "tuning <key> <scale> <magnet>" line, version 4
-    // an optional "vib <cents> <hz> <fade>" after the velocity. Older versions still load, with defaults.
-    constexpr const char* header = "PitchPaintPattern 4";
+    // an optional "vib <cents> <hz> <fade>" after the velocity, version 5 an optional "dyn <count> <beat value>..."
+    // after that. Older versions still load, with defaults.
+    constexpr const char* header = "PitchPaintPattern 5";
 
     void appendNumber (std::string& s, double v)
     {
@@ -271,6 +343,17 @@ std::string serialise (const Pattern& p)
             appendNumber (s, t.vibrato.rateHz);
             s += ' ';
             appendNumber (s, t.vibrato.fadeBeats);
+        }
+        if (! t.dynamics.empty())
+        {
+            s += " dyn " + std::to_string (t.dynamics.points.size());
+            for (const auto& e : t.dynamics.points)
+            {
+                s += ' ';
+                appendNumber (s, e.beat);
+                s += ' ';
+                appendNumber (s, e.value);
+            }
         }
         for (const auto& pt : t.points)
         {
@@ -313,7 +396,7 @@ std::optional<Pattern> parsePattern (const std::string& text)
 
     const auto magic = word();
     const auto version = word();
-    if (magic != "PitchPaintPattern" || (version != "1" && version != "2" && version != "3" && version != "4") || word() != "length")
+    if (magic != "PitchPaintPattern" || (version != "1" && version != "2" && version != "3" && version != "4" && version != "5") || word() != "length")
         return std::nullopt;
 
     Pattern p;
@@ -355,6 +438,25 @@ std::optional<Pattern> parsePattern (const std::string& text)
                 || v.depthCents > 1200.0 || v.rateHz <= 0.0 || v.rateHz > 50.0 || v.fadeBeats < 0.0)
                 return std::nullopt;
             t.vibrato = v;
+        }
+        else
+        {
+            pos = save;
+        }
+        if (const char* save = pos; word() == "dyn")
+        {
+            double count = 0.0;
+            if (! number (count) || count < 0.0 || count > 100000.0)
+                return std::nullopt;
+            for (int i = 0; i < (int) count; ++i)
+            {
+                EnvelopePoint e {};
+                if (! number (e.beat) || ! number (e.value) || e.value < 0.0 || e.value > 1.0)
+                    return std::nullopt;
+                t.dynamics.points.push_back (e);
+            }
+            std::stable_sort (t.dynamics.points.begin(), t.dynamics.points.end(),
+                              [] (const EnvelopePoint& a, const EnvelopePoint& b) { return a.beat < b.beat; });
         }
         else
         {

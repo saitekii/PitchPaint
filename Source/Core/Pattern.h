@@ -31,6 +31,32 @@ struct Vibrato
     bool operator== (const Vibrato&) const = default;
 };
 
+// A value from 0 to 1 over time, for a stroke's dynamics (loudness). Beats are relative to the stroke's start, so the
+// envelope moves, pastes and duplicates with its stroke. No points = constant full level.
+struct EnvelopePoint
+{
+    double beat;
+    double value;
+
+    bool operator== (const EnvelopePoint&) const = default;
+};
+
+struct Envelope
+{
+    std::vector<EnvelopePoint> points; // sorted by beat
+
+    bool empty() const { return points.empty(); }
+    double valueAt (double beat) const; // linear, held flat beyond the ends; 1 when empty
+    void shift (double deltaBeats);     // move every point; drops nothing
+    bool operator== (const Envelope&) const = default;
+};
+
+// Same overwrite-between-the-two-beats behaviour as drawSegment, for envelopes (drawing in the dynamics lane).
+void drawEnvelopeSegment (Envelope&, EnvelopePoint from, EnvelopePoint to);
+
+enum class DynamicsShape { swell, fade, hairpin, accent };
+Envelope makeDynamicsShape (DynamicsShape, double lengthBeats);
+
 // One drawn stroke: a pitch curve over time that sounds as a single note.
 // Points are kept sorted by beat; at least two points are needed for it to sound.
 struct Trajectory
@@ -41,6 +67,7 @@ struct Trajectory
     std::vector<PitchPoint> points;
     int velocity = defaultVelocity; // MIDI note-on velocity, 1..127
     Vibrato vibrato;
+    Envelope dynamics; // loudness over time (relative beats); empty = full
 
     bool isPlayable() const { return points.size() >= 2 && endBeat() > startBeat(); }
     double startBeat() const { return points.front().beat; }
@@ -65,6 +92,9 @@ struct Pattern
 
 // The pitch a stroke sounds at: drawn curve, then the pitch magnet, then vibrato (which needs the tempo for Hz).
 double soundingPitch (const Trajectory&, const Tuning&, double beat, double beatsPerSecond);
+
+// A stroke's dynamics level (0..1) at an absolute beat.
+double dynamicsAt (const Trajectory&, double beat);
 
 // --- Clipboard ------------------------------------------------------------------------------------------------------
 // The given strokes as a pattern of their own (same loop length and tuning), e.g. to serialise to the clipboard.

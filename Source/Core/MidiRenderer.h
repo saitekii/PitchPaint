@@ -13,6 +13,7 @@ struct MidiEvent
 {
     int sample;                     // offset within the current block
     std::array<std::uint8_t, 3> bytes;
+    int size = 3;                   // 2 for channel pressure
 };
 
 using MidiOut = std::vector<MidiEvent>;
@@ -23,11 +24,15 @@ enum class OutputMode
     mono  // single channel 1, one trajectory at a time (latest start wins)
 };
 
+// Where stroke dynamics go. Pressure is the MPE standard (per note in MPE mode); the CCs are per channel.
+enum class DynamicsOutput { off, pressure, cc11, cc1, cc74, cc7 };
+
 struct RenderSettings
 {
     OutputMode mode = OutputMode::mpe;
     int bendRange = 48;        // semitones each way; must match the receiving synth
     int memberChannels = 15;   // MPE only: channels 2 .. 1 + memberChannels
+    DynamicsOutput dynamics = DynamicsOutput::off;
 
     bool operator== (const RenderSettings&) const = default;
 };
@@ -62,6 +67,7 @@ private:
         bool sounding = false;
         int note = 0;
         int bend = -1;
+        int dynamics = -1; // last value sent (0..127), -1 = none yet
         std::uint64_t lastUsed = 0; // note-on or note-off order, for channel allocation
     };
 
@@ -71,6 +77,8 @@ private:
     void updateVoice (Voice&, int channel, const Trajectory&, double localBeat, int sample, MidiOut&);
     void stopVoice (Voice&, int channel, int sample, MidiOut&);
     int bendValue (double semitones) const;
+    void sendDynamics (Voice&, int channel, const Trajectory&, double beat, int sample, MidiOut&, bool force);
+    void addDynamicsMessage (int channel, int value, int sample, MidiOut&) const;
     int channelFor (int voiceIndex) const;
 
     RenderSettings settings;

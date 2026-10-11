@@ -16,6 +16,8 @@ and the plugin drives an **external synthesizer** over MIDI using MPE or pitch b
 - Zoom and scroll in time and pitch.
 - **Vibrato per stroke** (depth, rate in Hz, fade-in), added on top of the drawing so it can be changed or removed later.
 - **Copy, cut, paste, duplicate** via the system clipboard, so strokes also paste between PitchPaint instances.
+- **Dynamics per stroke**: draw loudness over time in the Dynamics lane, or use Swell / Fade / Hairpin / Accent;
+  sent as MPE pressure or a CC of your choice.
 - **Velocity per stroke**: set it for new strokes, or select strokes and change theirs; line thickness shows it.
 - **Snap to a time grid** (1 bar … 1/32, triplets): note starts, lengths, moves and eraser cuts land on the grid, while pitch stays free.
 - Any number of overlapping strokes: up to 15 sounding at once in MPE mode.
@@ -60,6 +62,7 @@ The plugin ends up in `build/PitchPaint_artefacts/Release/VST3/PitchPaint.vst3`.
 | Select / move | Select (S): click, Shift-click, or drag a box. Drag a selected stroke to move; Shift moves by whole semitones. |
 | Delete selection | Delete or Backspace |
 | Copy / cut / paste / duplicate | Ctrl+C / Ctrl+X / Ctrl+V / Ctrl+D, or the **Edit** menu. Paste goes to the mouse position (on the grid) when the mouse is over the canvas, otherwise to the original time; duplicate goes right after the selection. Pasted strokes are selected, ready to move. |
+| Dynamics | **Dynamics** lane under the canvas (toggle with the **Dynamics** button): select strokes, then drag in the lane to draw their loudness over time, or click **Swell**, **Fade**, **Hairpin**, **Accent** or **Clear**. **Send** chooses the MIDI control: Pressure (MPE standard), CC11 Expression, CC1 Mod wheel, CC74 Brightness or CC7 Volume. The first time you add dynamics, Send switches on by itself. |
 | Vibrato | **Vibrato...**: depth (cents), rate (Hz) and fade-in (beats) for the selected strokes, or for new strokes when nothing is selected. Applied after the pitch magnet, so the magnet never flattens it. |
 | Undo / redo | Ctrl+Z / Ctrl+Y (or Ctrl+Shift+Z), or the toolbar buttons |
 | Select all / deselect | Ctrl+A / Esc |
@@ -124,6 +127,7 @@ VST3 has no raw MIDI output. Notes leave PitchPaint as VST3 note events, and pit
 
 | Synth | Status |
 |---|---|
+| Surge XT, dynamics | **Measured: Surge XT's default patch ignores pressure, CC11, CC1, CC74 and CC7**, so dynamics are silent until the patch routes one of them (for example pressure or expression to volume or the filter). Check Surge's manual for routing modulation sources; the Preview sound plays pressure, CC11 and CC7 as volume, so you can hear the intended shape. |
 | Surge XT | **Verified** in MPE mode with MPE enabled in Surge: follows the drawing within a few hundredths of a semitone. With MPE off it applies ±2 and doesn't follow; use Mono mode and set ranges to match. |
 | Dexed | Not verified: it receives the MIDI, but its default patch couldn't be pitch-measured reliably. Should work in Mono mode with the bend ranges matched. |
 | Other synths | MPE synths: enable MPE, match the bend range. Non-MPE synths: Mono mode, match the bend range. Synths in omni mode apply every channel's bends to every note, which breaks MPE mode. |

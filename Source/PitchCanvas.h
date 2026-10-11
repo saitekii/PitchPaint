@@ -63,8 +63,9 @@ public:
     void focusGained (FocusChangeType) override;
     void focusLost (FocusChangeType) override;
 
+    static constexpr float gutter = 40.0f; // note-name column on the left (the dynamics lane lines up with it)
+
 private:
-    static constexpr float gutter = 40.0f; // note-name column on the left
 
     enum class Drag { none, drawing, erasing, moving, boxSelecting };
 

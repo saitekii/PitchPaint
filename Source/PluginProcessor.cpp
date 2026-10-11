@@ -7,7 +7,10 @@ PitchPaintProcessor::PitchPaintProcessor()
               { std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { "mode", 1 }, "Output mode",
                                                               juce::StringArray { "MPE", "Mono pitch-bend" }, 0),
                 std::make_unique<juce::AudioParameterInt> (juce::ParameterID { "bendRange", 1 }, "Bend range (semitones)", 1, 96, 48),
-                std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "preview", 1 }, "Preview sound", false) }),
+                std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "preview", 1 }, "Preview sound", false),
+                std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { "dynamics", 1 }, "Dynamics output",
+                                                              juce::StringArray { "Off", "Pressure", "CC11 Expression", "CC1 Mod wheel",
+                                                                                  "CC74 Brightness", "CC7 Volume" }, 0) }),
       snapshots (pattern)
 {
 }
@@ -69,6 +72,7 @@ pitchpaint::RenderSettings PitchPaintProcessor::currentSettings() const
     pitchpaint::RenderSettings s;
     s.mode = params.getRawParameterValue ("mode")->load() < 0.5f ? pitchpaint::OutputMode::mpe : pitchpaint::OutputMode::mono;
     s.bendRange = (int) params.getRawParameterValue ("bendRange")->load();
+    s.dynamics = (pitchpaint::DynamicsOutput) juce::roundToInt (params.getRawParameterValue ("dynamics")->load());
     return s;
 }
 
@@ -126,7 +130,7 @@ void PitchPaintProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
     previewWasOn = previewOn;
 
     for (const auto& e : events)
-        midi.addEvent (e.bytes.data(), 3, e.sample);
+        midi.addEvent (e.bytes.data(), e.size, e.sample);
 }
 
 juce::AudioProcessorEditor* PitchPaintProcessor::createEditor()
@@ -145,6 +149,7 @@ void PitchPaintProcessor::getStateInformation (juce::MemoryBlock& dest)
     root.setAttribute ("snap", gridDivisions[getGridIndex()].name);
     root.setAttribute ("velocity", getNewStrokeVelocity());
     root.setAttribute ("smoothing", getDrawSmoothing());
+    root.setAttribute ("dynamicsLane", isDynamicsLaneShown());
     const auto vib = getNewStrokeVibrato();
     root.setAttribute ("vibratoDepth", vib.depthCents);
     root.setAttribute ("vibratoRate", vib.rateHz);
@@ -173,6 +178,7 @@ void PitchPaintProcessor::setStateInformation (const void* data, int size)
 
     setNewStrokeVelocity (xml->getIntAttribute ("velocity", pitchpaint::Trajectory::defaultVelocity));
     setDrawSmoothing (xml->getIntAttribute ("smoothing", 40));
+    setDynamicsLaneShown (xml->getBoolAttribute ("dynamicsLane", true));
     setNewStrokeVibrato ({ xml->getDoubleAttribute ("vibratoDepth", 0.0), xml->getDoubleAttribute ("vibratoRate", 5.5),
                            xml->getDoubleAttribute ("vibratoFade", 0.5) });
     const auto snapName = xml->getStringAttribute ("snap", gridDivisions[defaultGridIndex].name);

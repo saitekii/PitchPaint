@@ -55,6 +55,17 @@ void MidiRenderer::configure (const RenderSettings& newSettings, MidiOut& out, i
 {
     allNotesOff (out, sample);
 
+    // Dynamics switched off (or to another control): put the old control back to its resting value on every channel
+    // we may have used, so the synth isn't left at a low level.
+    if (settings.dynamics != DynamicsOutput::off && newSettings.dynamics != settings.dynamics)
+    {
+        const int neutral = settings.dynamics == DynamicsOutput::cc11 ? 127
+                          : settings.dynamics == DynamicsOutput::cc7  ? 100
+                          : settings.dynamics == DynamicsOutput::cc74 ? 64 : 0;
+        for (int ch = 1; ch <= 1 + maxMemberChannels; ++ch)
+            addDynamicsMessage (ch, neutral, sample, out);
+    }
+
     settings = newSettings;
     settings.bendRange = std::clamp (settings.bendRange, 1, 96);
     settings.memberChannels = std::clamp (settings.memberChannels, 1, maxMemberChannels);
@@ -216,9 +227,35 @@ void MidiRenderer::startVoice (Voice& v, int channel, const Trajectory& t, doubl
     v.sounding = true;
     v.lastUsed = ++counter;
 
-    // Bend first, so the note starts at the right pitch.
+    // Bend (and dynamics) first, so the note starts at the right pitch and level.
     out.push_back ({ sample, { status (0xE0, channel), (std::uint8_t) (v.bend & 0x7F), (std::uint8_t) (v.bend >> 7) } });
+    sendDynamics (v, channel, t, beat, sample, out, true);
     out.push_back ({ sample, { status (0x90, channel), (std::uint8_t) v.note, velocityOf (t) } });
+}
+
+void MidiRenderer::addDynamicsMessage (int channel, int value, int sample, MidiOut& out) const
+{
+    const auto v = (std::uint8_t) std::clamp (value, 0, 127);
+    switch (settings.dynamics)
+    {
+        case DynamicsOutput::pressure: out.push_back ({ sample, { status (0xD0, channel), v, 0 }, 2 }); break;
+        case DynamicsOutput::cc11: out.push_back ({ sample, { status (0xB0, channel), 11, v } }); break;
+        case DynamicsOutput::cc1:  out.push_back ({ sample, { status (0xB0, channel), 1, v } }); break;
+        case DynamicsOutput::cc74: out.push_back ({ sample, { status (0xB0, channel), 74, v } }); break;
+        case DynamicsOutput::cc7:  out.push_back ({ sample, { status (0xB0, channel), 7, v } }); break;
+        case DynamicsOutput::off: break;
+    }
+}
+
+void MidiRenderer::sendDynamics (Voice& v, int channel, const Trajectory& t, double beat, int sample, MidiOut& out, bool force)
+{
+    if (settings.dynamics == DynamicsOutput::off)
+        return;
+    const int value = (int) std::lround (dynamicsAt (t, beat) * 127.0);
+    if (! force && value == v.dynamics)
+        return;
+    v.dynamics = value;
+    addDynamicsMessage (channel, value, sample, out);
 }
 
 void MidiRenderer::updateVoice (Voice& v, int channel, const Trajectory& t, double beat, int sample, MidiOut& out)
@@ -234,6 +271,7 @@ void MidiRenderer::updateVoice (Voice& v, int channel, const Trajectory& t, doub
         v.note = std::clamp ((int) std::lround (pitch + ahead), 0, 127);
         v.bend = bendValue (pitch - v.note);
         out.push_back ({ sample, { status (0xE0, channel), (std::uint8_t) (v.bend & 0x7F), (std::uint8_t) (v.bend >> 7) } });
+        sendDynamics (v, channel, t, beat, sample, out, true);
         out.push_back ({ sample, { status (0x90, channel), (std::uint8_t) v.note, velocityOf (t) } });
         return;
     }
@@ -244,6 +282,7 @@ void MidiRenderer::updateVoice (Voice& v, int channel, const Trajectory& t, doub
         v.bend = bend;
         out.push_back ({ sample, { status (0xE0, channel), (std::uint8_t) (bend & 0x7F), (std::uint8_t) (bend >> 7) } });
     }
+    sendDynamics (v, channel, t, beat, sample, out, false);
 }
 
 void MidiRenderer::stopVoice (Voice& v, int channel, int sample, MidiOut& out)
@@ -251,6 +290,7 @@ void MidiRenderer::stopVoice (Voice& v, int channel, int sample, MidiOut& out)
     out.push_back ({ sample, { status (0x80, channel), (std::uint8_t) v.note, 0 } });
     v.sounding = false;
     v.bend = -1;
+    v.dynamics = -1;
     v.lastUsed = ++counter;
 }
 
