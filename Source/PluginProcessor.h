@@ -1,11 +1,9 @@
 #pragma once
 
+#include "Core/MidiRenderer.h"
+
 #include <juce_audio_processors/juce_audio_processors.h>
 
-#include <array>
-
-// Spike: emits hard-coded continuous pitch curves as MIDI note + pitch-bend,
-// to verify that VST3 MIDI output (incl. pitch bend) reaches a downstream synth.
 class PitchPaintProcessor final : public juce::AudioProcessor
 {
 public:
@@ -37,20 +35,14 @@ public:
     juce::AudioProcessorValueTreeState params;
 
 private:
-    struct Voice
-    {
-        int channel = 1;
-        int baseNote = 60;
-        bool on = false;
-        int lastBend = -1;
-    };
+    pitchpaint::RenderSettings currentSettings() const;
 
-    void allNotesOff (juce::MidiBuffer&, int sampleOffset);
-    void sendConfig (juce::MidiBuffer&, int sampleOffset, bool mpe, int bendRange);
+    pitchpaint::Pattern pattern;
+    pitchpaint::MidiRenderer renderer;
+    pitchpaint::MidiOut events;
 
     double sampleRate = 44100.0;
-    std::array<Voice, 2> voices;
+    bool needsConfigure = true;
     bool wasPlaying = false;
     double expectedPpq = 0.0;
-    int configuredMode = -1, configuredRange = -1;
 };

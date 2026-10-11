@@ -11,6 +11,20 @@ FetchContent_Declare(JUCE
     GIT_SHALLOW TRUE)
 FetchContent_MakeAvailable(JUCE)
 
+# JUCE-free core: pattern model + MIDI renderer, shared by the plugin and the tests.
+add_library(PitchPaintCore STATIC
+    Source/Core/Pattern.cpp
+    Source/Core/MidiRenderer.cpp)
+target_include_directories(PitchPaintCore PUBLIC Source)
+if(MSVC)
+    target_compile_options(PitchPaintCore PRIVATE /W4)
+endif()
+
+enable_testing()
+add_executable(CoreTests Tests/CoreTests.cpp)
+target_link_libraries(CoreTests PRIVATE PitchPaintCore)
+add_test(NAME CoreTests COMMAND CoreTests)
+
 juce_add_plugin(PitchPaint
     COMPANY_NAME "PitchPaint"
     PLUGIN_MANUFACTURER_CODE Ptpt
@@ -32,5 +46,5 @@ target_compile_definitions(PitchPaint PUBLIC
     JUCE_VST3_CAN_REPLACE_VST2=0)
 
 target_link_libraries(PitchPaint
-    PRIVATE juce::juce_audio_utils
+    PRIVATE PitchPaintCore juce::juce_audio_utils
     PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_lto_flags juce::juce_recommended_warning_flags)

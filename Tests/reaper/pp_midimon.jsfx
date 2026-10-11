@@ -1,0 +1,45 @@
+desc:PitchPaint test MIDI monitor (writes the received MIDI state to audio channels)
+// out 1-5: sounding pitch on MIDI channels 1-5 (note + bend * range) / 128, 0 when silent
+// out 6: MPE member count from the MPE Configuration Message / 128 (-1 if none)
+// out 7: last RPN 0 bend range / 128 (-1 if none)
+// out 8: total received events / 1e6
+in_pin:none
+out_pin:pitch ch1
+out_pin:pitch ch2
+out_pin:pitch ch3
+out_pin:pitch ch4
+out_pin:pitch ch5
+out_pin:MPE members
+out_pin:bend range
+out_pin:event count
+
+@init
+bend = 0; held = 16; note = 32; msb = 48; lsb = 64; range = 80;
+i = 0;
+loop(16, bend[i] = 8192; held[i] = 0; note[i] = 0; msb[i] = 127; lsb[i] = 127; range[i] = 2; i += 1);
+mcm = -1; lastRange = -1; count = 0;
+
+@block
+while (midirecv(ofs, m1, m2, m3)) (
+  st = m1 & 0xF0; ch = m1 & 0x0F;
+  count += 1;
+  st == 0xE0 ? bend[ch] = m2 + m3 * 128;
+  (st == 0x90 && m3 > 0) ? (held[ch] += 1; note[ch] = m2;);
+  (st == 0x80 || (st == 0x90 && m3 == 0)) ? held[ch] = max(0, held[ch] - 1);
+  st == 0xB0 ? (
+    m2 == 101 ? msb[ch] = m3;
+    m2 == 100 ? lsb[ch] = m3;
+    m2 == 6 ? (
+      (msb[ch] == 0 && lsb[ch] == 0) ? (range[ch] = m3; lastRange = m3;);
+      (msb[ch] == 0 && lsb[ch] == 6) ? mcm = m3;
+    );
+  );
+  midisend(ofs, m1, m2, m3);
+);
+
+@sample
+c = 0;
+loop(5, spl(c) = held[c] > 0 ? (note[c] + (bend[c] - 8192) / 8191 * range[c]) / 128 : 0; c += 1);
+spl5 = mcm / 128;
+spl6 = lastRange / 128;
+spl7 = count / 1000000;

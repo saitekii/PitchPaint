@@ -2,34 +2,26 @@
 
 namespace
 {
-    constexpr double loopBeats = 8.0;
-    constexpr int stepSamples = 64; // pitch-bend update granularity
-
-    // Hard-coded test curves: {start beat, end beat, pitch(beat)}.
-    struct TestCurve
+    // Until the drawing canvas exists: the spike's two test curves, sampled into trajectories.
+    pitchpaint::Pattern makeDemoPattern()
     {
-        double start, end;
-        double (*pitchAt) (double beat);
-    };
+        using namespace pitchpaint;
+        constexpr double twoPi = juce::MathConstants<double>::twoPi;
 
-    const TestCurve curves[] = {
-        { 0.0, 7.5, [] (double b) { return 60.0 + 7.0 * std::sin (juce::MathConstants<double>::twoPi * b / 4.0); } },
-        { 2.0, 6.0, [] (double b) { return 72.0 + 5.0 * std::sin (juce::MathConstants<double>::twoPi * (b - 2.0) / 4.0); } },
-    };
+        const auto sample = [] (std::uint32_t id, double start, double end, auto&& pitchAt)
+        {
+            Trajectory t { id, {} };
+            for (double b = start; b < end; b += 1.0 / 32.0)
+                t.points.push_back ({ b, pitchAt (b) });
+            t.points.push_back ({ end, pitchAt (end) });
+            return t;
+        };
 
-    int bendValue (double semitones, int range)
-    {
-        return juce::jlimit (0, 16383, 8192 + juce::roundToInt (semitones / range * 8191.0));
-    }
-
-    void addRpn (juce::MidiBuffer& out, int ch, int rpnLsb, int value, int pos)
-    {
-        out.addEvent (juce::MidiMessage::controllerEvent (ch, 101, 0), pos);
-        out.addEvent (juce::MidiMessage::controllerEvent (ch, 100, rpnLsb), pos);
-        out.addEvent (juce::MidiMessage::controllerEvent (ch, 6, value), pos);
-        out.addEvent (juce::MidiMessage::controllerEvent (ch, 38, 0), pos);
-        out.addEvent (juce::MidiMessage::controllerEvent (ch, 101, 127), pos);
-        out.addEvent (juce::MidiMessage::controllerEvent (ch, 100, 127), pos);
+        Pattern p;
+        p.lengthBeats = 8.0;
+        p.trajectories.push_back (sample (1, 0.0, 7.5, [] (double b) { return 60.0 + 7.0 * std::sin (twoPi * b / 4.0); }));
+        p.trajectories.push_back (sample (2, 2.0, 6.0, [] (double b) { return 72.0 + 5.0 * std::sin (twoPi * (b - 2.0) / 4.0); }));
+        return p;
     }
 }
 
@@ -38,14 +30,16 @@ PitchPaintProcessor::PitchPaintProcessor()
       params (*this, nullptr, "PARAMS",
               { std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { "mode", 1 }, "Output mode",
                                                               juce::StringArray { "MPE", "Mono pitch-bend" }, 0),
-                std::make_unique<juce::AudioParameterInt> (juce::ParameterID { "bendRange", 1 }, "Bend range (semitones)", 1, 96, 48) })
+                std::make_unique<juce::AudioParameterInt> (juce::ParameterID { "bendRange", 1 }, "Bend range (semitones)", 1, 96, 48) }),
+      pattern (makeDemoPattern())
 {
 }
 
 void PitchPaintProcessor::prepareToPlay (double sr, int)
 {
     sampleRate = sr;
-    configuredMode = configuredRange = -1;
+    events.reserve (8192);
+    needsConfigure = true;
 }
 
 bool PitchPaintProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -53,107 +47,52 @@ bool PitchPaintProcessor::isBusesLayoutSupported (const BusesLayout& layouts) co
     return layouts.getMainOutputChannelSet() == juce::AudioChannelSet::stereo();
 }
 
-void PitchPaintProcessor::allNotesOff (juce::MidiBuffer& out, int pos)
+pitchpaint::RenderSettings PitchPaintProcessor::currentSettings() const
 {
-    for (auto& v : voices)
-    {
-        if (v.on)
-            out.addEvent (juce::MidiMessage::noteOff (v.channel, v.baseNote), pos);
-        v.on = false;
-        v.lastBend = -1;
-    }
-}
-
-void PitchPaintProcessor::sendConfig (juce::MidiBuffer& out, int pos, bool mpe, int range)
-{
-    if (mpe)
-    {
-        addRpn (out, 1, 6, 15, pos);   // MPE Configuration Message: lower zone, 15 member channels
-        addRpn (out, 2, 0, range, pos); // member-channel pitch-bend range
-    }
-    else
-    {
-        addRpn (out, 1, 0, range, pos);
-    }
+    pitchpaint::RenderSettings s;
+    s.mode = params.getRawParameterValue ("mode")->load() < 0.5f ? pitchpaint::OutputMode::mpe : pitchpaint::OutputMode::mono;
+    s.bendRange = (int) params.getRawParameterValue ("bendRange")->load();
+    return s;
 }
 
 void PitchPaintProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
 {
     buffer.clear();
     midi.clear();
+    events.clear();
 
-    const bool mpe = params.getRawParameterValue ("mode")->load() < 0.5f;
-    const int range = (int) params.getRawParameterValue ("bendRange")->load();
-    const int numVoices = mpe ? 2 : 1;
-
-    if ((mpe ? 0 : 1) != configuredMode || range != configuredRange)
+    if (const auto settings = currentSettings(); needsConfigure || ! (settings == renderer.getSettings()))
     {
-        allNotesOff (midi, 0);
-        sendConfig (midi, 0, mpe, range);
-        configuredMode = mpe ? 0 : 1;
-        configuredRange = range;
+        renderer.configure (settings, events, 0);
+        needsConfigure = false;
     }
 
     const auto pos = getPlayHead() != nullptr ? getPlayHead()->getPosition() : std::nullopt;
-    const bool playing = pos.hasValue() && pos->getIsPlaying();
-    const auto ppqOpt = pos.hasValue() ? pos->getPpqPosition() : std::nullopt;
-    const auto bpmOpt = pos.hasValue() ? pos->getBpm() : std::nullopt;
-
-    if (! playing || ! ppqOpt.hasValue())
-    {
-        if (wasPlaying)
-            allNotesOff (midi, 0);
-        wasPlaying = false;
-        return;
-    }
-
-    const double ppq0 = *ppqOpt;
-    const double beatsPerSample = bpmOpt.orFallback (120.0) / 60.0 / sampleRate;
+    const auto ppq = pos.hasValue() ? pos->getPpqPosition() : std::nullopt;
+    const bool playing = pos.hasValue() && pos->getIsPlaying() && ppq.hasValue();
     const int numSamples = buffer.getNumSamples();
 
-    // Transport jumped (seek, host loop) -> release everything, voices restart from the new position.
-    if (wasPlaying && std::abs (ppq0 - expectedPpq) > 1.0e-3)
-        allNotesOff (midi, 0);
-
-    wasPlaying = true;
-    expectedPpq = ppq0 + numSamples * beatsPerSample;
-
-    for (int s = 0; s < numSamples; s += stepSamples)
+    if (! playing)
     {
-        const double beat = std::fmod (std::max (0.0, ppq0 + s * beatsPerSample), loopBeats);
-
-        for (int i = 0; i < (int) voices.size(); ++i)
-        {
-            auto& v = voices[(size_t) i];
-            const auto& c = curves[i];
-            const bool active = i < numVoices && beat >= c.start && beat < c.end;
-
-            if (active)
-            {
-                if (! v.on)
-                {
-                    v.channel = mpe ? 2 + i : 1;
-                    v.baseNote = juce::roundToInt (c.pitchAt (c.start));
-                }
-
-                const int bend = bendValue (c.pitchAt (beat) - v.baseNote, range);
-
-                if (bend != v.lastBend) // bend goes before note-on at the same timestamp
-                    midi.addEvent (juce::MidiMessage::pitchWheel (v.channel, bend), s);
-                v.lastBend = bend;
-
-                if (! v.on)
-                    midi.addEvent (juce::MidiMessage::noteOn (v.channel, v.baseNote, (juce::uint8) 100), s);
-                v.on = true;
-            }
-            else if (v.on)
-            {
-                midi.addEvent (juce::MidiMessage::noteOff (v.channel, v.baseNote), s);
-                v.on = false;
-                v.lastBend = -1;
-            }
-        }
+        if (wasPlaying)
+            renderer.allNotesOff (events, 0);
+        wasPlaying = false;
     }
+    else
+    {
+        const double beatsPerSample = pos->getBpm().orFallback (120.0) / 60.0 / sampleRate;
+
+        // Seek or host loop: release everything; notes restart from the new position.
+        if (wasPlaying && std::abs (*ppq - expectedPpq) > 1.0e-3)
+            renderer.allNotesOff (events, 0);
+
+        renderer.render (pattern, *ppq, beatsPerSample, numSamples, events);
+        wasPlaying = true;
+        expectedPpq = *ppq + numSamples * beatsPerSample;
+    }
+
+    for (const auto& e : events)
+        midi.addEvent (e.bytes.data(), 3, e.sample);
 }
 
 juce::AudioProcessorEditor* PitchPaintProcessor::createEditor()
