@@ -8,7 +8,8 @@ include(FetchContent)
 FetchContent_Declare(JUCE
     GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
     GIT_TAG 9.0.3
-    GIT_SHALLOW TRUE)
+    GIT_SHALLOW TRUE
+    GIT_CONFIG core.longpaths=true) # JUCE's examples exceed Windows' 260-char path limit in deep build folders
 FetchContent_MakeAvailable(JUCE)
 
 # JUCE-free core: pattern model + MIDI renderer, shared by the plugin and the tests.
