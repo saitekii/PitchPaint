@@ -51,6 +51,21 @@ public:
     bool canUndo() const { return history.canUndo(); }
     bool canRedo() const { return history.canRedo(); }
 
+    // Time grid for editing (not a parameter: it doesn't affect the sound). Saved with the project.
+    struct GridDivision
+    {
+        const char* name;
+        double beats; // 0 = off
+    };
+    static constexpr GridDivision gridDivisions[] = {
+        { "Off", 0.0 },          { "1 bar", 4.0 },  { "1/2", 2.0 },          { "1/4", 1.0 },          { "1/8", 0.5 },
+        { "1/16", 0.25 },        { "1/32", 0.125 }, { "1/8T", 1.0 / 3.0 },   { "1/16T", 1.0 / 6.0 },
+    };
+    static constexpr int defaultGridIndex = 5; // 1/16
+    int getGridIndex() const { return gridIndex.load(); }
+    void setGridIndex (int index) { gridIndex.store (juce::jlimit (0, (int) std::size (gridDivisions) - 1, index)); }
+    double getGridBeats() const { return gridDivisions[getGridIndex()].beats; }
+
     // Any thread: loop-local beat at the start of the latest block, and whether the host is playing.
     double getPlayheadBeat() const { return playheadBeat.load(); }
     bool isPlaying() const { return playing.load(); }
@@ -60,6 +75,7 @@ private:
 
     pitchpaint::Pattern pattern;
     int patternVersion = 0;
+    std::atomic<int> gridIndex { defaultGridIndex };
     pitchpaint::UndoHistory history;
     std::optional<pitchpaint::Pattern> gestureStart;
     pitchpaint::PatternSnapshots snapshots;

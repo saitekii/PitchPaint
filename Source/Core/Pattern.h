@@ -44,6 +44,14 @@ struct Pattern
     bool operator== (const Pattern&) const = default;
 };
 
+// --- Time grid (pitch is never snapped here) -------------------------------------------------------------------------
+// Nearest multiple of `step` beats.
+double snapBeat (double beat, double step);
+
+// Moves a trajectory's start and end to the nearest grid lines so its length is a whole number of steps (at least one),
+// staying within [0, maxBeat]. The curve in between is kept; where an end moves outward, the end pitch is held.
+void snapEnds (Trajectory&, double step, double maxBeat);
+
 // Removes the time range [fromBeat, toBeat] from a trajectory (split eraser). The parts on either side remain, with
 // end points interpolated exactly at the cut: the left part keeps the id, the right part gets a new one.
 // Parts shorter than minLength beats are dropped, so erasing never leaves inaudible slivers.

@@ -163,6 +163,11 @@ void PitchCanvas::paintStatus (juce::Graphics& g, const pitchpaint::Pattern& pat
                       message.withTrimmedTop (34.0f).toNearestInt(), juce::Justification::centredTop, 2);
 }
 
+double PitchCanvas::gridStep (const juce::ModifierKeys& mods) const
+{
+    return mods.isAltDown() ? 0.0 : processor.getGridBeats(); // Alt: ignore the grid for this action
+}
+
 void PitchCanvas::nudgeSelection (double deltaBeats, double deltaPitch)
 {
     if (selection.empty())
@@ -211,14 +216,18 @@ void PitchCanvas::paintGrid (juce::Graphics& g, const pitchpaint::Pattern& patte
     // Vertical lines: bars, beats, and quarter beats once zoomed in far enough to see them.
     const auto view = getVisibleBeats();
     const double pxPerBeat = area.getWidth() / view.getLength();
-    const double step = pxPerBeat >= 60.0 ? 0.25 : (pxPerBeat >= 10.0 ? 1.0 : 4.0);
+    // With snapping on, minor lines show the snap grid (when they're at least 8 px apart).
+    const double grid = processor.getGridBeats();
+    const double step = grid > 0.0 && grid * pxPerBeat >= 8.0 ? grid
+                                                              : (pxPerBeat >= 60.0 ? 0.25 : (pxPerBeat >= 10.0 ? 1.0 : 4.0));
     const double lastBeat = std::min (view.getEnd(), pattern.lengthBeats);
 
     for (auto k = (long long) std::ceil (view.getStart() / step); k * step <= lastBeat + 1.0e-9; ++k)
     {
         const double beat = k * step;
-        const bool isBar = std::fmod (beat, 4.0) == 0.0;
-        const bool isBeat = std::fmod (beat, 1.0) == 0.0;
+        const auto onMultiple = [beat] (double m) { const double r = std::fmod (beat, m); return r < 1e-6 || m - r < 1e-6; };
+        const bool isBar = onMultiple (4.0);
+        const bool isBeat = onMultiple (1.0);
         g.setColour (isBar ? colour::gridBar : (isBeat ? colour::gridBeat : colour::gridBeat.withAlpha (0.5f)));
         const int x = juce::roundToInt (beatToX (beat));
         g.drawVerticalLine (x, area.getY(), area.getBottom());
@@ -413,6 +422,7 @@ void PitchCanvas::mouseDown (const juce::MouseEvent& e)
         erasedIds.clear();
         erasedWhole = 0;
         lastErasePos = e.position;
+        eraseGrid = gridStep (e.mods);
         eraseAlong (e.position, e.position, e.mods.isShiftDown());
         return;
     }
@@ -447,6 +457,8 @@ void PitchCanvas::mouseDown (const juce::MouseEvent& e)
     drag = Drag::drawing;
     auto pattern = processor.getPattern();
     lastPoint = pointAt (e.position, e.mods.isShiftDown());
+    if (const double grid = gridStep (e.mods); grid > 0.0)
+        lastPoint.beat = juce::jlimit (0.0, processor.getPattern().lengthBeats, pitchpaint::snapBeat (lastPoint.beat, grid));
     drawingId = pattern.nextId();
     pattern.trajectories.push_back ({ drawingId, { lastPoint } });
     processor.setPattern (std::move (pattern));
@@ -466,7 +478,17 @@ void PitchCanvas::mouseDrag (const juce::MouseEvent& e)
         case Drag::moving:
         {
             const auto area = plotArea();
-            const double deltaBeats = (e.position.x - dragStart.x) / area.getWidth() * getVisibleBeats().getLength();
+            double deltaBeats = (e.position.x - dragStart.x) / area.getWidth() * getVisibleBeats().getLength();
+            if (const double grid = gridStep (e.mods); grid > 0.0)
+            {
+                // Snap the selection's start, not the mouse offset, so off-grid strokes land on the grid.
+                double start = std::numeric_limits<double>::max();
+                for (const auto& t : moveBase.trajectories)
+                    if (isSelected (t.id) && ! t.points.empty())
+                        start = std::min (start, t.startBeat());
+                if (start < std::numeric_limits<double>::max())
+                    deltaBeats = pitchpaint::snapBeat (start + deltaBeats, grid) - start;
+            }
             double deltaPitch = -(e.position.y - dragStart.y) / area.getHeight() * (topPitch - bottomPitch);
             if (e.mods.isShiftDown())
                 deltaPitch = std::round (deltaPitch); // keep intonation: move by whole semitones
@@ -519,14 +541,24 @@ void PitchCanvas::mouseDrag (const juce::MouseEvent& e)
     }
 }
 
-void PitchCanvas::mouseUp (const juce::MouseEvent&)
+void PitchCanvas::mouseUp (const juce::MouseEvent& e)
 {
     if (drag == Drag::drawing)
     {
-        // A click without a drag leaves a single point that can't sound: drop it.
         auto pattern = processor.getPattern();
-        if (std::erase_if (pattern.trajectories, [this] (const auto& t) { return t.id == drawingId && ! t.isPlayable(); }) > 0)
-            processor.setPattern (std::move (pattern));
+        if (const double grid = gridStep (e.mods); grid > 0.0)
+        {
+            // Start and end on grid lines, so the note length is whole grid steps. A click becomes a one-step note.
+            for (auto& t : pattern.trajectories)
+                if (t.id == drawingId)
+                    pitchpaint::snapEnds (t, grid, pattern.lengthBeats);
+        }
+        else
+        {
+            // Without a grid, a click without a drag leaves a single point that can't sound: drop it.
+            std::erase_if (pattern.trajectories, [this] (const auto& t) { return t.id == drawingId && ! t.isPlayable(); });
+        }
+        processor.setPattern (std::move (pattern));
         drawingId = 0;
     }
 
@@ -568,7 +600,13 @@ void PitchCanvas::eraseAlong (juce::Point<float> from, juce::Point<float> to, bo
 
             for (const auto id : hit)
             {
-                pitchpaint::cutTrajectory (pattern, id, xToBeat (pos.x - eraseRadius), xToBeat (pos.x + eraseRadius));
+                double cutFrom = xToBeat (pos.x - eraseRadius), cutTo = xToBeat (pos.x + eraseRadius);
+                if (eraseGrid > 0.0) // cut whole grid cells so the remaining pieces stay on the grid
+                {
+                    cutFrom = std::floor (cutFrom / eraseGrid + 1e-9) * eraseGrid;
+                    cutTo = std::ceil (cutTo / eraseGrid - 1e-9) * eraseGrid;
+                }
+                pitchpaint::cutTrajectory (pattern, id, cutFrom, cutTo);
                 if (std::find (erasedIds.begin(), erasedIds.end(), id) == erasedIds.end())
                     erasedIds.push_back (id);
             }

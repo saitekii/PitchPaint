@@ -26,6 +26,9 @@ public:
     void clearSelection();
     void deleteSelection();
     void nudgeSelection (double deltaBeats, double deltaPitch); // keyboard moves, one undo step each
+
+    // Time-grid step for an action with these modifiers: 0 when snapping is off or Alt is held.
+    double gridStep (const juce::ModifierKeys&) const;
     const std::vector<std::uint32_t>& getSelection() const { return selection; }
 
     // Visible time range in beats (the whole loop unless zoomed in with Ctrl+wheel).
@@ -90,5 +93,6 @@ private:
     bool focusFromKeyboard = false;          // focus ring only for keyboard focus, not after clicks
     std::vector<std::uint32_t> erasedIds;   // strokes touched by the current erase gesture (for feedback)
     int erasedWhole = 0;
+    double eraseGrid = 0.0;                 // grid step for the current erase gesture (0 = free)
     int lastSeenVersion = -1;
 };

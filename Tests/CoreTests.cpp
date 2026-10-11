@@ -220,6 +220,32 @@ void testCutTrajectory()
     CHECK (p == make());
 }
 
+void testTimeGrid()
+{
+    CHECK (snapBeat (1.13, 0.25) == 1.25 && snapBeat (1.12, 0.25) == 1.0 && snapBeat (1.13, 0.0) == 1.13);
+    CHECK (std::abs (snapBeat (0.30, 1.0 / 3.0) - 1.0 / 3.0) < 1e-12); // triplets
+
+    // Drawn from 1.1 to 2.8 on a one-beat grid: becomes exactly 1.0 .. 3.0, with every drawn point kept.
+    Trajectory t { 1, { { 1.1, 60.0 }, { 2.0, 62.0 }, { 2.8, 61.0 } } };
+    snapEnds (t, 1.0, 16.0);
+    CHECK (t.startBeat() == 1.0 && t.endBeat() == 3.0);
+    CHECK (t.points.size() == 5 && t.points[2] == (PitchPoint { 2.0, 62.0 }));
+    CHECK (t.points.front().pitch == 60.0 && t.points.back().pitch == 61.0); // ends held where extended
+
+    // Trimmed when the end rounds inward: the end pitch is interpolated, not jumped.
+    Trajectory trim { 2, { { 0.0, 60.0 }, { 1.2, 61.2 } } };
+    snapEnds (trim, 1.0, 16.0);
+    CHECK (trim.endBeat() == 1.0 && std::abs (trim.points.back().pitch - 61.0) < 1e-12);
+
+    // Very short strokes become one grid step; strokes near the loop end stay inside the loop.
+    Trajectory tiny { 3, { { 4.02, 60.0 }, { 4.1, 60.0 } } };
+    snapEnds (tiny, 0.25, 16.0);
+    CHECK (tiny.startBeat() == 4.0 && tiny.endBeat() == 4.25);
+    Trajectory atEnd { 4, { { 15.9, 60.0 }, { 15.95, 60.0 } } };
+    snapEnds (atEnd, 1.0, 16.0);
+    CHECK (atEnd.startBeat() == 15.0 && atEnd.endBeat() == 16.0);
+}
+
 void testUndoHistory()
 {
     Pattern a, b, c;
@@ -603,6 +629,7 @@ int main()
         { "serialise round trip", testSerialiseRoundTrip },
         { "move trajectories", testMoveTrajectories },
         { "cut trajectory (split eraser)", testCutTrajectory },
+        { "time grid snapping", testTimeGrid },
         { "undo history", testUndoHistory },
         { "preview synth plays drawn pitch (Hz)", testPreviewSynthPlaysDrawnPitch },
         { "MPE config messages", testMpeConfigMessages },

@@ -27,6 +27,8 @@ private:
     void timerCallback() override;
     void selectTool (PitchCanvas::Tool);
     void setLoopBars (int bars);
+    void setGrid (int index);
+    int lastGridIndex = PitchPaintProcessor::defaultGridIndex; // what G turns snapping back on to
     void undo();
     void redo();
     void refresh(); // toolbar state and footer text from the processor
@@ -39,8 +41,8 @@ private:
 
     juce::TextButton pencilButton { "Pencil" }, selectButton { "Select" }, eraserButton { "Eraser" };
     juce::TextButton undoButton { "Undo" }, redoButton { "Redo" };
-    juce::Label lengthLabel { {}, "Loop" }, modeLabel { {}, "Output" }, rangeLabel { {}, "Bend range" };
-    juce::ComboBox lengthBox, modeBox;
+    juce::Label lengthLabel { {}, "Loop" }, snapLabel { {}, "Snap" }, modeLabel { {}, "Output" }, rangeLabel { {}, "Bend range" };
+    juce::ComboBox lengthBox, snapBox, modeBox;
     juce::Slider rangeSlider { juce::Slider::IncDecButtons, juce::Slider::TextBoxLeft };
     juce::ToggleButton previewToggle { "Preview" };
     juce::Label synthHint, footerRight;

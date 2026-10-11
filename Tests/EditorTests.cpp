@@ -154,6 +154,10 @@ int main (int argc, char** argv)
     // Empty state on first use.
     saveSnapshot (4);
 
+    // New instances snap to 1/16. Steps 1-12 test free drawing, so turn snapping off; step 13 tests snapping.
+    CHECK (proc.getGridBeats() == 0.25);
+    proc.setGridIndex (0);
+
     // 1. Draw a rising glide from beat 1 (C4) to beat 5 (E4 + 30 cents), then a separate, overlapping wiggle.
     std::vector<juce::Point<float>> glide;
     for (int i = 0; i <= 40; ++i)
@@ -400,6 +404,67 @@ int main (int argc, char** argv)
         std::printf ("[info] footer after delete: \"%s\"\n", footerText().toRawUTF8());
         CHECK (press (ctrl ('z')));
         CHECK (proc.getPattern() == before && footerText() == "Undone.");
+    }
+
+    // 13. Time snapping: G turns it back on; with a 1/4 (one-beat) grid, strokes start and end on beats, a click
+    //     places a one-beat note, Alt ignores the grid, moves land on the grid, the eraser cuts whole cells, and
+    //     the setting is saved with the project.
+    {
+        const auto find = [&] (const juce::String& title) -> juce::ComboBox*
+        {
+            for (auto* child : editor->getChildren())
+                if (auto* box = dynamic_cast<juce::ComboBox*> (child); box != nullptr && box->getTitle() == title)
+                    return box;
+            return nullptr;
+        };
+        const auto strokeStartingNear = [&] (double beat) -> const pitchpaint::Trajectory*
+        {
+            for (const auto& t : proc.getPattern().trajectories)
+                if (std::abs (t.startBeat() - beat) < 0.02)
+                    return &t;
+            return nullptr;
+        };
+        const auto alt = juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | juce::ModifierKeys::altModifier);
+
+        CHECK (press (juce::KeyPress ('g')) && proc.getGridBeats() == 0.25);
+        auto* snapBox = find ("Snap to time grid");
+        CHECK (snapBox != nullptr);
+        if (snapBox != nullptr)
+            snapBox->setSelectedId (4, juce::sendNotificationSync); // "1/4"
+        CHECK (proc.getGridBeats() == 1.0);
+
+        CHECK (press (juce::KeyPress ('p')));
+        drag (*canvas, { at (*canvas, L, 13.1, 80.0), at (*canvas, L, 14.0, 81.5), at (*canvas, L, 14.8, 80.0) });
+        const auto* snapped = strokeStartingNear (13.0);
+        CHECK (snapped != nullptr && std::abs (snapped->endBeat() - 15.0) < 1e-9);
+
+        drag (*canvas, { at (*canvas, L, 8.6, 84.0) }); // a click
+        const auto* clicked = strokeStartingNear (9.0);
+        CHECK (clicked != nullptr && std::abs (clicked->endBeat() - 10.0) < 1e-9 && std::abs (clicked->pitchAt (9.5) - 84.0) < 0.1);
+
+        drag (*canvas, { at (*canvas, L, 7.1, 88.0), at (*canvas, L, 7.6, 88.0) }, alt); // Alt: free timing
+        const auto* free = strokeStartingNear (7.1);
+        CHECK (free != nullptr && std::abs (free->endBeat() - 7.6) < 0.02);
+
+        // Move the 13..15 stroke right by 0.7 beats: its start lands on beat 14, not 13.7.
+        CHECK (press (juce::KeyPress ('s')));
+        drag (*canvas, { at (*canvas, L, 14.0, 81.5), at (*canvas, L, 14.35, 81.5), at (*canvas, L, 14.7, 81.5) });
+        const auto* moved = strokeStartingNear (14.0);
+        CHECK (moved != nullptr && std::abs (moved->endBeat() - 16.0) < 1e-9);
+
+        // The eraser around beat 15.5 cuts the whole cell 15..16.
+        CHECK (press (juce::KeyPress ('e')));
+        const double movedPitch = moved != nullptr ? moved->pitchAt (15.5) : 80.0;
+        drag (*canvas, { at (*canvas, L, 15.5, movedPitch - 2.0), at (*canvas, L, 15.5, movedPitch + 2.0) });
+        const auto* trimmed = strokeStartingNear (14.0);
+        CHECK (trimmed != nullptr && std::abs (trimmed->endBeat() - 15.0) < 1e-9);
+
+        juce::MemoryBlock snapState;
+        proc.getStateInformation (snapState);
+        PitchPaintProcessor restored;
+        restored.setStateInformation (snapState.getData(), (int) snapState.getSize());
+        CHECK (restored.getGridBeats() == 1.0);
+        saveSnapshot (6);
     }
 
     // 12. Narrow window: the toolbar wraps instead of overlapping, everything stays inside, the canvas keeps space.

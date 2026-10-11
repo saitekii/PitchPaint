@@ -12,6 +12,7 @@ and the plugin drives an **external synthesizer** over MIDI using MPE or pitch b
 
 - Pencil, Select and Eraser tools; Shift snaps the pencil to semitones; the eraser cuts strokes apart.
 - Zoom and scroll in time and pitch.
+- **Snap to a time grid** (1 bar … 1/32, triplets): note starts, lengths, moves and eraser cuts land on the grid, while pitch stays free.
 - Any number of overlapping strokes: up to 15 sounding at once in MPE mode.
 - Select, box-select, move (Shift: by whole semitones), delete; undo/redo.
 - Loops of 1–16 bars following the host's transport; everything is saved with the project.
@@ -45,12 +46,13 @@ The plugin ends up in `build/PitchPaint_artefacts/Release/VST3/PitchPaint.vst3`.
 | Action | How |
 |---|---|
 | Draw | Pencil (P): drag. Shift: snap to semitones. Drawing back over a stroke redraws that part. |
+| Snap timing | **Snap** box (default 1/16; G turns it on/off). Stroke starts and ends land on grid lines, so note lengths are whole grid steps; with snapping on, a click places a one-step note. Hold Alt to ignore the grid for one action. |
 | Erase | Eraser (E), or right-drag with any tool: cuts out the part of a stroke it passes over (a cut in the middle leaves two strokes). Hold Shift to delete whole strokes. |
 | Select / move | Select (S): click, Shift-click, or drag a box. Drag a selected stroke to move; Shift moves by whole semitones. |
 | Delete selection | Delete or Backspace |
 | Undo / redo | Ctrl+Z / Ctrl+Y (or Ctrl+Shift+Z), or the toolbar buttons |
 | Select all / deselect | Ctrl+A / Esc |
-| Move selection by keyboard | Arrow keys: ±1 semitone / ±¼ beat; with Alt: ±10 cents / ±1/32 beat |
+| Move selection by keyboard | Arrow keys: ±1 semitone / ±1 grid step (¼ beat with snapping off); with Alt: ±10 cents / ±1/32 beat |
 | Scroll pitch / time | Mouse wheel / Shift+wheel (or sideways scroll) |
 | Zoom time / pitch | Ctrl+wheel / Alt+wheel |
 

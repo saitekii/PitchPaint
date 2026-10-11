@@ -5,7 +5,7 @@ using namespace theme;
 namespace
 {
     constexpr juce::uint32 statusMillis = 4000;
-    const juce::String shortcutsHint ("Shift: snap | Ctrl+Z/Y | Shift+wheel: scroll time | Ctrl+wheel: zoom time | Alt+wheel: zoom pitch");
+    const juce::String shortcutsHint ("Shift: snap pitch | Alt: ignore grid | G: snap on/off | Ctrl+Z/Y | Ctrl/Shift/Alt+wheel: zoom/scroll");
 }
 
 PitchPaintEditor::PitchPaintEditor (PitchPaintProcessor& p)
@@ -40,6 +40,14 @@ PitchPaintEditor::PitchPaintEditor (PitchPaintProcessor& p)
     lengthBox.setTitle ("Loop length");
     lengthBox.setTooltip ("Length of the pattern, which loops while the host plays.");
 
+    for (int i = 0; i < (int) std::size (PitchPaintProcessor::gridDivisions); ++i)
+        snapBox.addItem (PitchPaintProcessor::gridDivisions[i].name, i + 1);
+    snapBox.onChange = [this] { setGrid (snapBox.getSelectedId() - 1); };
+    snapBox.setTitle ("Snap to time grid");
+    snapBox.setTooltip ("Snaps stroke starts and ends (so note lengths are whole grid steps), moves and eraser cuts "
+                        "to this grid. With snapping on, a click places a one-step note. Pitch stays free "
+                        "(Shift snaps pitch). Hold Alt to ignore the grid; G turns snapping on and off.");
+
     modeBox.addItemList (processor.params.getParameter ("mode")->getAllValueStrings(), 1);
     modeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (processor.params, "mode", modeBox);
     modeBox.setTitle ("Output mode");
@@ -54,7 +62,7 @@ PitchPaintEditor::PitchPaintEditor (PitchPaintProcessor& p)
     previewAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (processor.params, "preview", previewToggle);
     previewToggle.setTooltip ("Built-in sound that plays exactly what is drawn. Use it to check your synth's pitch.");
 
-    for (auto* label : { &lengthLabel, &modeLabel, &rangeLabel })
+    for (auto* label : { &lengthLabel, &snapLabel, &modeLabel, &rangeLabel })
     {
         label->setFont (juce::Font (type::caption()));
         label->setColour (juce::Label::textColourId, colour::textSecondary);
@@ -62,6 +70,7 @@ PitchPaintEditor::PitchPaintEditor (PitchPaintProcessor& p)
         label->setInterceptsMouseClicks (false, false);
     }
     lengthLabel.attachToComponent (&lengthBox, true); // also links the label for assistive technology
+    snapLabel.attachToComponent (&snapBox, true);
     modeLabel.attachToComponent (&modeBox, true);
     rangeLabel.attachToComponent (&rangeSlider, true);
 
@@ -78,7 +87,7 @@ PitchPaintEditor::PitchPaintEditor (PitchPaintProcessor& p)
     setFocusContainerType (FocusContainerType::keyboardFocusContainer);
     int order = 1;
     for (auto* c : std::initializer_list<juce::Component*> { &pencilButton, &selectButton, &eraserButton, &undoButton, &redoButton,
-                                                             &lengthBox, &modeBox, &rangeSlider, &previewToggle, &canvas })
+                                                             &lengthBox, &snapBox, &modeBox, &rangeSlider, &previewToggle, &canvas })
     {
         c->setExplicitFocusOrder (order++);
         if (c != &canvas)
@@ -94,7 +103,7 @@ PitchPaintEditor::PitchPaintEditor (PitchPaintProcessor& p)
     setWantsKeyboardFocus (true);
     setResizable (true, true);
     setResizeLimits (560, 360, 3000, 2000);
-    setSize (1040, 600);
+    setSize (1120, 620);
 }
 
 PitchPaintEditor::~PitchPaintEditor()
@@ -120,6 +129,18 @@ void PitchPaintEditor::setLoopBars (int bars)
     pattern.lengthBeats = bars * 4.0;
     processor.applyEdit (std::move (pattern));
     showStatus ("Loop set to " + juce::String (bars) + (bars == 1 ? " bar" : " bars") + ". Ctrl+Z to undo.");
+}
+
+void PitchPaintEditor::setGrid (int index)
+{
+    if (index < 0 || index == processor.getGridIndex())
+        return;
+    processor.setGridIndex (index);
+    if (index > 0)
+        lastGridIndex = index;
+    canvas.repaint();
+    showStatus (index == 0 ? juce::String ("Snap off: timing is free.")
+                           : "Snap to " + juce::String (PitchPaintProcessor::gridDivisions[index].name) + ".");
 }
 
 void PitchPaintEditor::undo()
@@ -156,6 +177,7 @@ void PitchPaintEditor::showStatus (const juce::String& message)
 void PitchPaintEditor::refresh()
 {
     lengthBox.setSelectedId (juce::roundToInt (processor.getPattern().lengthBeats / 4.0), juce::dontSendNotification);
+    snapBox.setSelectedId (processor.getGridIndex() + 1, juce::dontSendNotification);
     undoButton.setEnabled (processor.canUndo());
     redoButton.setEnabled (processor.canRedo());
 
@@ -201,11 +223,13 @@ bool PitchPaintEditor::keyPressed (const juce::KeyPress& key)
         return true;
     }
 
-    // Arrow keys move the selection: up/down by a semitone, left/right by a quarter beat; Alt for fine steps.
+    // Arrow keys move the selection: up/down by a semitone, left/right by one grid step (a quarter beat with
+    // snapping off); Alt for fine steps.
     if (! canvas.getSelection().empty())
     {
         const bool fine = mods.isAltDown();
-        const double pitchStep = fine ? 0.1 : 1.0, timeStep = fine ? 1.0 / 32.0 : 0.25;
+        const double grid = processor.getGridBeats();
+        const double pitchStep = fine ? 0.1 : 1.0, timeStep = fine ? 1.0 / 32.0 : (grid > 0.0 ? grid : 0.25);
         if (code == juce::KeyPress::upKey)    { canvas.nudgeSelection (0.0, pitchStep); return true; }
         if (code == juce::KeyPress::downKey)  { canvas.nudgeSelection (0.0, -pitchStep); return true; }
         if (code == juce::KeyPress::leftKey)  { canvas.nudgeSelection (-timeStep, 0.0); return true; }
@@ -217,6 +241,7 @@ bool PitchPaintEditor::keyPressed (const juce::KeyPress& key)
     else if (ch == 'p' || ch == 'b') selectTool (PitchCanvas::Tool::pencil);
     else if (ch == 's' || ch == 'v') selectTool (PitchCanvas::Tool::select);
     else if (ch == 'e') selectTool (PitchCanvas::Tool::eraser);
+    else if (ch == 'g') setGrid (processor.getGridIndex() > 0 ? 0 : lastGridIndex);
     else return false;
     return true;
 }
@@ -245,7 +270,7 @@ std::vector<std::vector<PitchPaintEditor::Item>> PitchPaintEditor::toolbarGroups
     return {
         { { &pencilButton, 64 }, { &selectButton, 64 }, { &eraserButton, 64 } },
         { { &undoButton, 54 }, { &redoButton, 54 } },
-        { { nullptr, labelWidth (lengthLabel) }, { &lengthBox, 88 } },
+        { { nullptr, labelWidth (lengthLabel) }, { &lengthBox, 88 }, { nullptr, labelWidth (snapLabel) }, { &snapBox, 80 } },
         { { nullptr, labelWidth (modeLabel) }, { &modeBox, 140 }, { nullptr, labelWidth (rangeLabel) }, { &rangeSlider, 104 } },
         { { &previewToggle, 92 } },
     };

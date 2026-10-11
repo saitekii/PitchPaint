@@ -54,6 +54,37 @@ void drawSegment (Trajectory& t, PitchPoint from, PitchPoint to)
     pts.insert (pos, to);
 }
 
+double snapBeat (double beat, double step)
+{
+    return step > 0.0 ? std::round (beat / step) * step : beat;
+}
+
+void snapEnds (Trajectory& t, double step, double maxBeat)
+{
+    if (t.points.empty() || step <= 0.0)
+        return;
+
+    double start = snapBeat (t.startBeat(), step);
+    double end = snapBeat (t.endBeat(), step);
+    if (end - start < step * 0.5) // shorter than one step after rounding: make it exactly one
+        end = start + step;
+
+    // Keep inside the loop, shifting the pair back if the end would run past it.
+    if (end > maxBeat)
+    {
+        start -= end - std::max (maxBeat, step);
+        end = std::max (maxBeat, step);
+    }
+    start = std::max (0.0, start);
+
+    std::vector<PitchPoint> points { { start, t.pitchAt (start) } }; // pitchAt holds the end pitch outside the curve
+    for (const auto& pt : t.points)
+        if (pt.beat > start && pt.beat < end)
+            points.push_back (pt);
+    points.push_back ({ end, t.pitchAt (end) });
+    t.points = std::move (points);
+}
+
 void cutTrajectory (Pattern& p, std::uint32_t id, double fromBeat, double toBeat, double minLength)
 {
     const auto it = std::find_if (p.trajectories.begin(), p.trajectories.end(), [id] (const Trajectory& t) { return t.id == id; });

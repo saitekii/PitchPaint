@@ -33,8 +33,9 @@ label is bold.
 
 ## Layout
 
-- **Toolbar:** groups in reading order: Tools | Edit | Loop | Output + Bend range | Preview. Groups wrap onto
-  another row when the window is narrow and never overlap. The minimum window is 560 × 360.
+- **Toolbar:** groups in reading order: Tools | Edit | Loop + Snap | Output + Bend range | Preview. Groups wrap onto
+  another row when the window is narrow and never overlap. The default window is 1120 × 620, where everything
+  fits on one row; the minimum is 560 × 360.
 - **Canvas:** fills the remaining space. Time zoom/scroll: Ctrl+wheel and Shift+wheel. Pitch zoom/scroll: Alt+wheel and the wheel.
 - **Footer:**
   - Left: the persistent synth-setup line, which is never truncated and moves to its own row if needed.
@@ -64,7 +65,7 @@ label is bold.
 - **Keyboard:**
   - Tab reaches every toolbar control in reading order, then the canvas.
   - Clicking a toolbar control doesn't steal focus, so focus rings appear for keyboard use only.
-  - Shortcuts: P / S / E for tools, Ctrl+Z / Ctrl+Y, Ctrl+A, Delete, Esc.
+  - Shortcuts: P / S / E for tools, G for snap on/off, Ctrl+Z / Ctrl+Y, Ctrl+A, Delete, Esc.
   - Arrow keys move the selection (Alt for fine steps).
 - **Screen readers:** every control has an accessible name. Drop-downs and the bend-range field are linked to
   their visible labels. The canvas has a title, help text, and a live description such as "3 strokes in a 4-bar
