@@ -140,6 +140,7 @@ void PitchPaintProcessor::getStateInformation (juce::MemoryBlock& dest)
     juce::XmlElement root ("PitchPaint");
     root.setAttribute ("version", 1);
     root.setAttribute ("snap", gridDivisions[getGridIndex()].name);
+    root.setAttribute ("velocity", getNewStrokeVelocity());
     if (auto paramsXml = params.copyState().createXml())
         root.addChildElement (paramsXml.release());
     root.createNewChildElement ("Pattern")->addTextElement (juce::String (pitchpaint::serialise (*current)));
@@ -162,6 +163,7 @@ void PitchPaintProcessor::setStateInformation (const void* data, int size)
         if (auto parsed = pitchpaint::parsePattern (patternXml->getAllSubText().toStdString()))
             loaded = std::move (*parsed);
 
+    setNewStrokeVelocity (xml->getIntAttribute ("velocity", pitchpaint::Trajectory::defaultVelocity));
     const auto snapName = xml->getStringAttribute ("snap", gridDivisions[defaultGridIndex].name);
     for (int i = 0; i < (int) std::size (gridDivisions); ++i)
         if (snapName == gridDivisions[i].name)

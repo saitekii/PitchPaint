@@ -66,6 +66,10 @@ public:
     void setGridIndex (int index) { gridIndex.store (juce::jlimit (0, (int) std::size (gridDivisions) - 1, index)); }
     double getGridBeats() const { return gridDivisions[getGridIndex()].beats; }
 
+    // Velocity given to newly drawn strokes (each stroke keeps its own). Saved with the project.
+    int getNewStrokeVelocity() const { return newStrokeVelocity.load(); }
+    void setNewStrokeVelocity (int v) { newStrokeVelocity.store (juce::jlimit (1, 127, v)); }
+
     // Any thread: loop-local beat at the start of the latest block, and whether the host is playing.
     double getPlayheadBeat() const { return playheadBeat.load(); }
     bool isPlaying() const { return playing.load(); }
@@ -76,6 +80,7 @@ private:
     pitchpaint::Pattern pattern;
     int patternVersion = 0;
     std::atomic<int> gridIndex { defaultGridIndex };
+    std::atomic<int> newStrokeVelocity { pitchpaint::Trajectory::defaultVelocity };
     pitchpaint::UndoHistory history;
     std::optional<pitchpaint::Pattern> gestureStart;
     pitchpaint::PatternSnapshots snapshots;

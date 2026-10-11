@@ -98,7 +98,7 @@ void cutTrajectory (Pattern& p, std::uint32_t id, double fromBeat, double toBeat
     if (toBeat <= original.startBeat() || fromBeat >= original.endBeat())
         return; // no overlap
 
-    Trajectory left { original.id, {} }, right { p.nextId(), {} };
+    Trajectory left { original.id, {}, original.velocity }, right { p.nextId(), {}, original.velocity };
 
     if (fromBeat > original.startBeat())
     {
@@ -163,7 +163,8 @@ void moveTrajectories (Pattern& p, const std::vector<std::uint32_t>& ids, double
 
 namespace
 {
-    constexpr const char* header = "PitchPaintPattern 1";
+    // Version 2 adds "v <velocity>" after the id. Version 1 (no velocity) still loads, with the default velocity.
+    constexpr const char* header = "PitchPaintPattern 2";
 
     void appendNumber (std::string& s, double v)
     {
@@ -181,7 +182,7 @@ std::string serialise (const Pattern& p)
 
     for (const auto& t : p.trajectories)
     {
-        s += "\nt " + std::to_string (t.id);
+        s += "\nt " + std::to_string (t.id) + " v " + std::to_string (t.velocity);
         for (const auto& pt : t.points)
         {
             s += ' ';
@@ -223,7 +224,7 @@ std::optional<Pattern> parsePattern (const std::string& text)
 
     const auto magic = word();
     const auto version = word();
-    if (magic + " " + version != header || word() != "length")
+    if (magic != "PitchPaintPattern" || (version != "1" && version != "2") || word() != "length")
         return std::nullopt;
 
     Pattern p;
@@ -237,6 +238,14 @@ std::optional<Pattern> parsePattern (const std::string& text)
             return std::nullopt;
 
         Trajectory t { (std::uint32_t) id, {} };
+        skipSpace();
+        if (pos < end && *pos == 'v')
+        {
+            double velocity = 0.0;
+            if (word() != "v" || ! number (velocity) || velocity < 1.0 || velocity > 127.0)
+                return std::nullopt;
+            t.velocity = (int) velocity;
+        }
         while (! atLineEnd())
         {
             PitchPoint pt {};

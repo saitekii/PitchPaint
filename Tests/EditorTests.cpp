@@ -129,7 +129,7 @@ int main (int argc, char** argv)
         CHECK (theme::contrastRatio (c::textOnAccent, c::accent) >= 4.5);
         CHECK (theme::contrastRatio (c::borderControl, c::surface) >= 3.0);
         CHECK (theme::contrastRatio (c::focusRing, c::surface) >= 3.0 && theme::contrastRatio (c::focusRing, c::canvas) >= 3.0);
-        CHECK (theme::contrastRatio (c::accent, c::surface) >= 3.0);
+        CHECK (theme::contrastRatio (c::accent, c::surface) >= 4.5); // also used as text ("Selected velocity")
         CHECK (theme::contrastRatio (c::playhead, c::canvas) >= 3.0);
         for (const auto s : c::strokes)
             CHECK (theme::contrastRatio (s, c::canvas) >= 3.0);
@@ -465,6 +465,57 @@ int main (int argc, char** argv)
         restored.setStateInformation (snapState.getData(), (int) snapState.getSize());
         CHECK (restored.getGridBeats() == 1.0);
         saveSnapshot (6);
+    }
+
+    // 14. Velocity: the field sets the velocity of new strokes; with strokes selected it shows and edits theirs
+    //     (one undo step); the new-stroke velocity is saved with the project.
+    {
+        juce::Slider* velocity = nullptr;
+        juce::Label* velocityLabel = nullptr;
+        for (auto* child : editor->getChildren())
+        {
+            if (auto* s = dynamic_cast<juce::Slider*> (child); s != nullptr && s->getTitle() == "Velocity")
+                velocity = s;
+            if (auto* l = dynamic_cast<juce::Label*> (child); l != nullptr && l->getText().endsWith ("elocity"))
+                velocityLabel = l;
+        }
+        CHECK (velocity != nullptr && velocityLabel != nullptr);
+        if (velocity != nullptr && velocityLabel != nullptr)
+        {
+            const auto settle = [] { juce::MessageManager::getInstance()->runDispatchLoopUntil (80); };
+
+            CHECK (press (juce::KeyPress ('p')));
+            canvas->clearSelection();
+            settle();
+            CHECK (velocityLabel->getText() == "Velocity" && (int) velocity->getValue() == 100);
+            velocity->setValue (64, juce::sendNotificationSync);
+            CHECK (proc.getNewStrokeVelocity() == 64);
+
+            drag (*canvas, { at (*canvas, L, 1.0, 90.0), at (*canvas, L, 1.5, 91.0), at (*canvas, L, 2.0, 90.0) });
+            const auto newId = proc.getPattern().trajectories.back().id;
+            CHECK (proc.getPattern().trajectories.back().velocity == 64);
+
+            // Select it: the field now shows and edits its velocity.
+            CHECK (press (juce::KeyPress ('s')));
+            drag (*canvas, { at (*canvas, L, 1.5, 91.0) });
+            settle();
+            CHECK (canvas->getSelection() == std::vector<std::uint32_t> { newId });
+            CHECK (velocityLabel->getText() == "Selected velocity" && (int) velocity->getValue() == 64);
+
+            const auto before = proc.getPattern();
+            velocity->setValue (110, juce::sendNotificationSync); // like typing a value: one edit
+            CHECK (proc.getPattern().trajectories.back().velocity == 110 && proc.getNewStrokeVelocity() == 64);
+            proc.undo();
+            CHECK (proc.getPattern() == before);
+
+            juce::MemoryBlock velocityState;
+            proc.getStateInformation (velocityState);
+            PitchPaintProcessor restored;
+            restored.setStateInformation (velocityState.getData(), (int) velocityState.getSize());
+            CHECK (restored.getNewStrokeVelocity() == 64);
+            CHECK (restored.getPattern().trajectories.back().velocity == 64);
+            saveSnapshot (7);
+        }
     }
 
     // 12. Narrow window: the toolbar wraps instead of overlapping, everything stays inside, the canvas keeps space.

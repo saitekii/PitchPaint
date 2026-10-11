@@ -35,6 +35,8 @@ namespace
 
     std::uint8_t status (int type, int channel) { return (std::uint8_t) (type | (channel - 1)); }
 
+    std::uint8_t velocityOf (const Trajectory& t) { return (std::uint8_t) std::clamp (t.velocity, 1, 127); }
+
     void addRpn (MidiOut& out, int sample, int channel, int rpnLsb, int value)
     {
         const auto cc = [&] (int controller, int v)
@@ -56,7 +58,6 @@ void MidiRenderer::configure (const RenderSettings& newSettings, MidiOut& out, i
     settings = newSettings;
     settings.bendRange = std::clamp (settings.bendRange, 1, 96);
     settings.memberChannels = std::clamp (settings.memberChannels, 1, maxMemberChannels);
-    settings.velocity = std::clamp (settings.velocity, 1, 127);
 
     if (settings.mode == OutputMode::mpe)
     {
@@ -215,7 +216,7 @@ void MidiRenderer::startVoice (Voice& v, int channel, const Trajectory& t, doubl
 
     // Bend first, so the note starts at the right pitch.
     out.push_back ({ sample, { status (0xE0, channel), (std::uint8_t) (v.bend & 0x7F), (std::uint8_t) (v.bend >> 7) } });
-    out.push_back ({ sample, { status (0x90, channel), (std::uint8_t) v.note, (std::uint8_t) settings.velocity } });
+    out.push_back ({ sample, { status (0x90, channel), (std::uint8_t) v.note, velocityOf (t) } });
 }
 
 void MidiRenderer::updateVoice (Voice& v, int channel, const Trajectory& t, double beat, int sample, MidiOut& out)
@@ -231,7 +232,7 @@ void MidiRenderer::updateVoice (Voice& v, int channel, const Trajectory& t, doub
         v.note = std::clamp ((int) std::lround (pitch + ahead), 0, 127);
         v.bend = bendValue (pitch - v.note);
         out.push_back ({ sample, { status (0xE0, channel), (std::uint8_t) (v.bend & 0x7F), (std::uint8_t) (v.bend >> 7) } });
-        out.push_back ({ sample, { status (0x90, channel), (std::uint8_t) v.note, (std::uint8_t) settings.velocity } });
+        out.push_back ({ sample, { status (0x90, channel), (std::uint8_t) v.note, velocityOf (t) } });
         return;
     }
 

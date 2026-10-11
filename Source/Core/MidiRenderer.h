@@ -28,7 +28,6 @@ struct RenderSettings
     OutputMode mode = OutputMode::mpe;
     int bendRange = 48;        // semitones each way; must match the receiving synth
     int memberChannels = 15;   // MPE only: channels 2 .. 1 + memberChannels
-    int velocity = 100;
 
     bool operator== (const RenderSettings&) const = default;
 };

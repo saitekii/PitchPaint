@@ -12,6 +12,7 @@ and the plugin drives an **external synthesizer** over MIDI using MPE or pitch b
 
 - Pencil, Select and Eraser tools; Shift snaps the pencil to semitones; the eraser cuts strokes apart.
 - Zoom and scroll in time and pitch.
+- **Velocity per stroke**: set it for new strokes, or select strokes and change theirs; line thickness shows it.
 - **Snap to a time grid** (1 bar … 1/32, triplets): note starts, lengths, moves and eraser cuts land on the grid, while pitch stays free.
 - Any number of overlapping strokes: up to 15 sounding at once in MPE mode.
 - Select, box-select, move (Shift: by whole semitones), delete; undo/redo.
@@ -52,6 +53,7 @@ The plugin ends up in `build/PitchPaint_artefacts/Release/VST3/PitchPaint.vst3`.
 | Delete selection | Delete or Backspace |
 | Undo / redo | Ctrl+Z / Ctrl+Y (or Ctrl+Shift+Z), or the toolbar buttons |
 | Select all / deselect | Ctrl+A / Esc |
+| Velocity | **Velocity** field: with nothing selected it sets the velocity of new strokes; with strokes selected (label turns to *Selected velocity*) it changes theirs. Thicker line = higher velocity; selected strokes show their value. |
 | Move selection by keyboard | Arrow keys: ±1 semitone / ±1 grid step (¼ beat with snapping off); with Alt: ±10 cents / ±1/32 beat |
 | Scroll pitch / time | Mouse wheel / Shift+wheel (or sideways scroll) |
 | Zoom time / pitch | Ctrl+wheel / Alt+wheel |
@@ -96,7 +98,6 @@ starts right but moves too little or too much.
 - Pitch bend is 14-bit: one step is about 0.6 cents at ±48 and about 0.02 cents at ±2.
 - Note starts and ends are sample-accurate. Bends are updated every 64 samples (≈1.3 ms at 48 kHz), only when
   the value changes.
-- Velocity is fixed at 100.
 
 ## Compatibility
 

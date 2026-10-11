@@ -21,8 +21,11 @@ struct PitchPoint
 // Points are kept sorted by beat; at least two points are needed for it to sound.
 struct Trajectory
 {
+    static constexpr int defaultVelocity = 100;
+
     std::uint32_t id = 0;
     std::vector<PitchPoint> points;
+    int velocity = defaultVelocity; // MIDI note-on velocity, 1..127
 
     bool isPlayable() const { return points.size() >= 2 && endBeat() > startBeat(); }
     double startBeat() const { return points.front().beat; }

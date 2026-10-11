@@ -28,6 +28,7 @@ private:
         int channel = 0, note = 0;
         double phase = 0.0, freq = 0.0, targetFreq = 0.0;
         float env = 0.0f;
+        float level = 1.0f; // from note-on velocity
         std::uint64_t started = 0;
     };
 

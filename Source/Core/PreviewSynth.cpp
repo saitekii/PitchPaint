@@ -63,6 +63,7 @@ void PreviewSynth::handle (const MidiEvent& e, int bendRange)
         v->channel = ch;
         v->note = e.bytes[1];
         v->freq = v->targetFreq = noteToHz (pitchOf (ch, v->note, bendRange));
+        v->level = e.bytes[2] / 127.0f; // linear in velocity
         v->started = ++counter;
     }
     else if (type == 0x80 || type == 0x90)
@@ -88,7 +89,7 @@ void PreviewSynth::render (float* left, float* right, int start, int end)
             v.phase -= std::floor (v.phase);
 
             // Sine plus a little 2nd harmonic: clear pitch, still a single zero crossing per cycle.
-            const float s = gain * v.env * (float) (std::sin (twoPi * v.phase) + 0.25 * std::sin (2.0 * twoPi * v.phase));
+            const float s = gain * v.level * v.env * (float) (std::sin (twoPi * v.phase) + 0.25 * std::sin (2.0 * twoPi * v.phase));
             left[i] += s;
             right[i] += s;
         }

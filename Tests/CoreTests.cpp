@@ -132,16 +132,21 @@ void testSerialiseRoundTrip()
     Pattern p;
     p.lengthBeats = 12.0;
     p.trajectories.push_back ({ 3, { { 0.1, 60.123456789012345 }, { 1.0 / 3.0, 61.0 }, { 2.0, 1e-9 } } });
-    p.trajectories.push_back ({ 7, { { 4.0, 127.0 }, { 5.5, 0.0 } } });
-    p.trajectories.push_back ({ 9, {} });
+    p.trajectories.push_back ({ 7, { { 4.0, 127.0 }, { 5.5, 0.0 } }, 1 });
+    p.trajectories.push_back ({ 9, {}, 127 });
 
     const auto text = serialise (p);
     const auto back = parsePattern (text);
-    CHECK (back.has_value() && *back == p); // bit-exact doubles
+    CHECK (back.has_value() && *back == p); // bit-exact doubles, velocities included
 
     CHECK (parsePattern (serialise (Pattern {})) == Pattern {});
     CHECK (! parsePattern ("").has_value());
-    CHECK (! parsePattern ("PitchPaintPattern 2\nlength 4\n").has_value());
+    CHECK (! parsePattern ("PitchPaintPattern 3\nlength 4\n").has_value());              // unknown future version
+    CHECK (! parsePattern ("PitchPaintPattern 2\nlength 4\nt 1 v 0 0 60 1 60\n").has_value()); // velocity out of range
+
+    // Version 1 (saved before velocity existed) loads with the default velocity.
+    const auto v1 = parsePattern ("PitchPaintPattern 1\nlength 4\nt 1 0 60 1 62\n");
+    CHECK (v1.has_value() && v1->trajectories.size() == 1 && v1->trajectories[0].velocity == Trajectory::defaultVelocity);
     CHECK (! parsePattern ("PitchPaintPattern 1\nlength 4\nt 1 0.5\n").has_value());   // beat without pitch
     CHECK (! parsePattern ("PitchPaintPattern 1\nlength 4\nt 1 0.5 nan\n").has_value());
     CHECK (! parsePattern ("PitchPaintPattern 1\nlength -1\n").has_value());
@@ -218,6 +223,53 @@ void testCutTrajectory()
     CHECK (p == make());
     cutTrajectory (p, 99, 0.0, 8.0); // unknown id
     CHECK (p == make());
+}
+
+void testVelocity()
+{
+    // Note-ons carry each stroke's own velocity: in MPE, in mono, and on retriggers beyond the bend range.
+    Pattern p;
+    p.lengthBeats = 8.0;
+    p.trajectories.push_back ({ 1, { { 0.0, 60.0 }, { 2.0, 60.0 } }, 30 });
+    p.trajectories.push_back ({ 2, { { 1.0, 64.0 }, { 3.0, 64.0 } }, 127 });
+    p.trajectories.push_back ({ 3, { { 4.0, 60.0 }, { 6.0, 70.0 } }, 77 }); // 10 semitones: retriggers at +-2
+
+    for (const auto& settings : { RenderSettings { OutputMode::mpe, 48 }, RenderSettings { OutputMode::mono, 2 } })
+    {
+        MidiRenderer r;
+        MidiOut setup;
+        r.configure (settings, setup, 0);
+        std::vector<std::pair<int, int>> ons; // note, velocity
+        for (const auto& a : renderAll (r, p, beatToSample (6.0), 512))
+            if (isNoteOn (a.event))
+                ons.push_back ({ a.event.bytes[1], a.event.bytes[2] });
+
+        // MPE (+-48) needs no retrigger; mono (+-2) retriggers stroke 3 several times.
+        CHECK (settings.mode == OutputMode::mpe ? ons.size() == 3 : ons.size() >= 5);
+        if (ons.size() >= 3)
+            CHECK (ons[0].second == 30 && ons[1].second == 127);
+        for (size_t i = 2; i < ons.size(); ++i)
+            CHECK (ons[i].second == 77 || (settings.mode == OutputMode::mono && ons[i].second == 30)); // mono resumes 1
+    }
+
+    // Cutting keeps the velocity on both parts.
+    cutTrajectory (p, 1, 0.5, 1.0);
+    CHECK (p.trajectories[0].velocity == 30 && p.trajectories[1].velocity == 30);
+
+    // The preview sound's level follows velocity (linear): velocity 64 is about half as loud as 127.
+    const auto rmsFor = [] (int velocity)
+    {
+        PreviewSynth synth;
+        synth.prepare (sampleRate);
+        MidiOut events { { 0, { 0x91, 69, (std::uint8_t) velocity } } };
+        std::vector<float> l (9600, 0.0f), r (9600, 0.0f);
+        synth.process (events, 48, l.data(), r.data(), 9600);
+        double sum = 0.0;
+        for (size_t i = 4800; i < l.size(); ++i)
+            sum += l[i] * l[i];
+        return std::sqrt (sum / 4800.0);
+    };
+    CHECK (std::abs (rmsFor (64) / rmsFor (127) - 64.0 / 127.0) < 0.01);
 }
 
 void testTimeGrid()
@@ -630,6 +682,7 @@ int main()
         { "move trajectories", testMoveTrajectories },
         { "cut trajectory (split eraser)", testCutTrajectory },
         { "time grid snapping", testTimeGrid },
+        { "velocity per stroke", testVelocity },
         { "undo history", testUndoHistory },
         { "preview synth plays drawn pitch (Hz)", testPreviewSynthPlaysDrawnPitch },
         { "MPE config messages", testMpeConfigMessages },

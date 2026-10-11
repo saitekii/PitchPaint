@@ -168,6 +168,26 @@ double PitchCanvas::gridStep (const juce::ModifierKeys& mods) const
     return mods.isAltDown() ? 0.0 : processor.getGridBeats(); // Alt: ignore the grid for this action
 }
 
+float PitchCanvas::strokeWidth (int velocity)
+{
+    return 1.0f + 3.0f * (float) juce::jlimit (1, 127, velocity) / 127.0f; // 1 px quiet ... 4 px loudest
+}
+
+void PitchCanvas::setSelectionVelocity (int velocity, bool live)
+{
+    if (selection.empty())
+        return;
+    auto pattern = processor.getPattern();
+    for (auto& t : pattern.trajectories)
+        if (isSelected (t.id))
+            t.velocity = juce::jlimit (1, 127, velocity);
+    if (live)
+        processor.setPattern (std::move (pattern)); // inside a gesture: the editor records one undo step
+    else
+        processor.applyEdit (std::move (pattern));
+    repaint();
+}
+
 void PitchCanvas::nudgeSelection (double deltaBeats, double deltaPitch)
 {
     if (selection.empty())
@@ -249,6 +269,7 @@ void PitchCanvas::paintTrajectories (juce::Graphics& g, const pitchpaint::Patter
             continue;
 
         const bool selected = isSelected (t.id);
+        const float width = strokeWidth (t.velocity) + (selected ? 0.5f : 0.0f);
         g.setColour (colour::forStroke (t.id));
 
         if (t.points.size() == 1)
@@ -266,10 +287,25 @@ void PitchCanvas::paintTrajectories (juce::Graphics& g, const pitchpaint::Patter
         if (selected)
         {
             g.setColour (colour::selection.withAlpha (0.85f));
-            g.strokePath (path, juce::PathStrokeType (6.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+            g.strokePath (path, juce::PathStrokeType (width + 3.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
             g.setColour (colour::forStroke (t.id));
         }
-        g.strokePath (path, juce::PathStrokeType (selected ? 3.0f : 2.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        g.strokePath (path, juce::PathStrokeType (width, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+        if (selected)
+        {
+            // Velocity value next to the start of each selected stroke.
+            const auto text = "vel " + juce::String (t.velocity);
+            const juce::Font font (theme::type::caption());
+            const auto start = juce::Point<float> { beatToX (t.points[0].beat), pitchToY (t.points[0].pitch) };
+            const float chipWidth = juce::GlyphArrangement::getStringWidth (font, text) + 2.0f * theme::space::xs;
+            const auto chip = juce::Rectangle<float> (start.x, start.y - 6.0f - 16.0f, chipWidth, 16.0f);
+            g.setColour (colour::surface.withAlpha (0.9f));
+            g.fillRoundedRectangle (chip, 4.0f);
+            g.setColour (colour::textPrimary);
+            g.setFont (font);
+            g.drawText (text, chip, juce::Justification::centred);
+        }
     }
 
     if (! box.isEmpty())
@@ -328,6 +364,14 @@ void PitchCanvas::timerCallback()
     {
         lastPaintedPlaying = playing;
         repaint();
+    }
+
+    if (selection != lastNotifiedSelection)
+    {
+        lastNotifiedSelection = selection;
+        updateAccessibleDescription();
+        if (onSelectionChanged)
+            onSelectionChanged();
     }
 
     const double beat = processor.isPlaying() ? processor.getPlayheadBeat() : -1.0;
@@ -460,7 +504,7 @@ void PitchCanvas::mouseDown (const juce::MouseEvent& e)
     if (const double grid = gridStep (e.mods); grid > 0.0)
         lastPoint.beat = juce::jlimit (0.0, processor.getPattern().lengthBeats, pitchpaint::snapBeat (lastPoint.beat, grid));
     drawingId = pattern.nextId();
-    pattern.trajectories.push_back ({ drawingId, { lastPoint } });
+    pattern.trajectories.push_back ({ drawingId, { lastPoint }, processor.getNewStrokeVelocity() });
     processor.setPattern (std::move (pattern));
     repaint();
 }

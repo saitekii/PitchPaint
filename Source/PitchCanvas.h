@@ -16,6 +16,9 @@ public:
     // Called (message thread) whenever the pattern changed, including from outside the canvas (undo, state load).
     std::function<void()> onPatternChanged;
 
+    // Called (message thread, from the timer) after the selection changed in any way.
+    std::function<void()> onSelectionChanged;
+
     // Short feedback after an edit (shown in the footer and announced to screen readers).
     std::function<void (const juce::String&)> onStatus;
 
@@ -26,6 +29,8 @@ public:
     void clearSelection();
     void deleteSelection();
     void nudgeSelection (double deltaBeats, double deltaPitch); // keyboard moves, one undo step each
+    void setSelectionVelocity (int velocity, bool live);        // live: no undo step (caller wraps a gesture)
+    static float strokeWidth (int velocity);                    // line thickness shows velocity
 
     // Time-grid step for an action with these modifiers: 0 when snapping is off or Alt is held.
     double gridStep (const juce::ModifierKeys&) const;
@@ -85,7 +90,7 @@ private:
     pitchpaint::PitchPoint lastPoint {};
     juce::Point<float> lastErasePos;
     pitchpaint::Pattern moveBase;    // pattern at the start of a move; moves are applied to it, not accumulated
-    std::vector<std::uint32_t> selection, boxBase;
+    std::vector<std::uint32_t> selection, boxBase, lastNotifiedSelection;
     juce::Rectangle<float> box;
 
     double lastPaintedPlayhead = -1.0;

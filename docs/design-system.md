@@ -15,7 +15,7 @@ All visual values live in [`Source/Theme.h`](../Source/Theme.h). All controls us
 | Control | `control`, `controlHover`, `controlPressed` | Button and field fills by state |
 | Text | `textPrimary`, `textSecondary`, `textOnAccent` | Content, supporting text, text on accent |
 | Border | `border`, `borderControl` | Separators; control outlines |
-| Accent | `accent` | The active tool, and other primary interactive elements |
+| Accent | `accent` | The active tool and other primary interactive elements; also text that says a control is editing the selection ("Selected velocity"), so it meets 4.5:1 |
 | Focus | `focusRing` | Keyboard focus |
 | Selection | `selection` | Outline of selected strokes |
 | Warning | `warning` | Synth setup the user must do |
@@ -33,8 +33,8 @@ label is bold.
 
 ## Layout
 
-- **Toolbar:** groups in reading order: Tools | Edit | Loop + Snap | Output + Bend range | Preview. Groups wrap onto
-  another row when the window is narrow and never overlap. The default window is 1120 × 620, where everything
+- **Toolbar:** groups in reading order: Tools | Edit | Loop + Snap | Velocity | Output + Bend range | Preview. Groups wrap onto
+  another row when the window is narrow and never overlap. The default window is 1300 × 640, where everything
   fits on one row; the minimum is 560 × 360.
 - **Canvas:** fills the remaining space. Time zoom/scroll: Ctrl+wheel and Shift+wheel. Pitch zoom/scroll: Alt+wheel and the wheel.
 - **Footer:**
@@ -49,7 +49,8 @@ label is bold.
 | Combo boxes | Default, hover, focus ring |
 | Toggle and bend-range field | JUCE defaults coloured by tokens, plus a focus ring |
 | Canvas | Empty state; transport chip ("Stopped - press Play in your DAW" / "Playing", with a square or triangle icon); focus ring when focused from the keyboard |
-| Strokes | Normal; selected (white outline and thicker line, not colour alone); eraser circle under the mouse |
+| Strokes | Line thickness shows velocity (1–4 px); selected: white outline, slightly thicker, and a "vel N" tag; eraser circle under the mouse |
+| Velocity field | Edits new-stroke velocity, or the selection's (label reads *Selected velocity* in the accent colour). A drag or a ± press is one undo step. |
 
 ## Feedback
 

@@ -28,6 +28,8 @@ private:
     void selectTool (PitchCanvas::Tool);
     void setLoopBars (int bars);
     void setGrid (int index);
+    void velocityChanged();
+    void velocityGestureEnded();
     int lastGridIndex = PitchPaintProcessor::defaultGridIndex; // what G turns snapping back on to
     void undo();
     void redo();
@@ -44,6 +46,9 @@ private:
     juce::Label lengthLabel { {}, "Loop" }, snapLabel { {}, "Snap" }, modeLabel { {}, "Output" }, rangeLabel { {}, "Bend range" };
     juce::ComboBox lengthBox, snapBox, modeBox;
     juce::Slider rangeSlider { juce::Slider::IncDecButtons, juce::Slider::TextBoxLeft };
+    juce::Label velocityLabel { {}, "Velocity" };
+    juce::Slider velocitySlider { juce::Slider::IncDecButtons, juce::Slider::TextBoxLeft };
+    bool velocityGesture = false;
     juce::ToggleButton previewToggle { "Preview" };
     juce::Label synthHint, footerRight;
 

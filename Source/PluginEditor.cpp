@@ -48,6 +48,22 @@ PitchPaintEditor::PitchPaintEditor (PitchPaintProcessor& p)
                         "to this grid. With snapping on, a click places a one-step note. Pitch stays free "
                         "(Shift snaps pitch). Hold Alt to ignore the grid; G turns snapping on and off.");
 
+    velocitySlider.setRange (1.0, 127.0, 1.0);
+    velocitySlider.setTextBoxStyle (juce::Slider::TextBoxLeft, false, 44, controlHeight);
+    velocitySlider.setIncDecButtonsMode (juce::Slider::incDecButtonsDraggable_Vertical);
+    velocitySlider.setTitle ("Velocity");
+    velocitySlider.setTooltip ("Velocity of the selected strokes, or of new strokes when nothing is selected. "
+                               "Line thickness shows each stroke's velocity.");
+    velocitySlider.onDragStart = [this]
+    {
+        velocityGesture = true;
+        if (! canvas.getSelection().empty())
+            processor.beginGesture();
+    };
+    velocitySlider.onValueChange = [this] { velocityChanged(); };
+    velocitySlider.onDragEnd = [this] { velocityGestureEnded(); };
+    canvas.onSelectionChanged = [this] { refresh(); };
+
     modeBox.addItemList (processor.params.getParameter ("mode")->getAllValueStrings(), 1);
     modeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (processor.params, "mode", modeBox);
     modeBox.setTitle ("Output mode");
@@ -62,7 +78,7 @@ PitchPaintEditor::PitchPaintEditor (PitchPaintProcessor& p)
     previewAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (processor.params, "preview", previewToggle);
     previewToggle.setTooltip ("Built-in sound that plays exactly what is drawn. Use it to check your synth's pitch.");
 
-    for (auto* label : { &lengthLabel, &snapLabel, &modeLabel, &rangeLabel })
+    for (auto* label : { &lengthLabel, &snapLabel, &velocityLabel, &modeLabel, &rangeLabel })
     {
         label->setFont (juce::Font (type::caption()));
         label->setColour (juce::Label::textColourId, colour::textSecondary);
@@ -71,6 +87,7 @@ PitchPaintEditor::PitchPaintEditor (PitchPaintProcessor& p)
     }
     lengthLabel.attachToComponent (&lengthBox, true); // also links the label for assistive technology
     snapLabel.attachToComponent (&snapBox, true);
+    velocityLabel.attachToComponent (&velocitySlider, true);
     modeLabel.attachToComponent (&modeBox, true);
     rangeLabel.attachToComponent (&rangeSlider, true);
 
@@ -87,7 +104,7 @@ PitchPaintEditor::PitchPaintEditor (PitchPaintProcessor& p)
     setFocusContainerType (FocusContainerType::keyboardFocusContainer);
     int order = 1;
     for (auto* c : std::initializer_list<juce::Component*> { &pencilButton, &selectButton, &eraserButton, &undoButton, &redoButton,
-                                                             &lengthBox, &snapBox, &modeBox, &rangeSlider, &previewToggle, &canvas })
+                                                             &lengthBox, &snapBox, &velocitySlider, &modeBox, &rangeSlider, &previewToggle, &canvas })
     {
         c->setExplicitFocusOrder (order++);
         if (c != &canvas)
@@ -103,7 +120,7 @@ PitchPaintEditor::PitchPaintEditor (PitchPaintProcessor& p)
     setWantsKeyboardFocus (true);
     setResizable (true, true);
     setResizeLimits (560, 360, 3000, 2000);
-    setSize (1120, 620);
+    setSize (1300, 640);
 }
 
 PitchPaintEditor::~PitchPaintEditor()
@@ -143,6 +160,37 @@ void PitchPaintEditor::setGrid (int index)
                            : "Snap to " + juce::String (PitchPaintProcessor::gridDivisions[index].name) + ".");
 }
 
+void PitchPaintEditor::velocityChanged()
+{
+    const int v = juce::roundToInt (velocitySlider.getValue());
+    if (canvas.getSelection().empty())
+    {
+        processor.setNewStrokeVelocity (v);
+        if (! velocityGesture)
+            showStatus ("New strokes: velocity " + juce::String (v) + ".");
+        return;
+    }
+    canvas.setSelectionVelocity (v, velocityGesture);
+    if (! velocityGesture) // typed into the field: a single edit
+        showStatus ("Velocity " + juce::String (v) + " on " + juce::String ((int) canvas.getSelection().size())
+                    + (canvas.getSelection().size() == 1 ? " stroke" : " strokes") + ". Ctrl+Z to undo.");
+}
+
+void PitchPaintEditor::velocityGestureEnded()
+{
+    velocityGesture = false;
+    const int v = juce::roundToInt (velocitySlider.getValue());
+    const auto count = (int) canvas.getSelection().size();
+    if (count == 0)
+    {
+        showStatus ("New strokes: velocity " + juce::String (v) + ".");
+        return;
+    }
+    processor.endGesture(); // the whole drag or button press is one undo step
+    showStatus ("Velocity " + juce::String (v) + " on " + juce::String (count) + (count == 1 ? " stroke" : " strokes")
+                + ". Ctrl+Z to undo.");
+}
+
 void PitchPaintEditor::undo()
 {
     if (! processor.canUndo())
@@ -178,6 +226,19 @@ void PitchPaintEditor::refresh()
 {
     lengthBox.setSelectedId (juce::roundToInt (processor.getPattern().lengthBeats / 4.0), juce::dontSendNotification);
     snapBox.setSelectedId (processor.getGridIndex() + 1, juce::dontSendNotification);
+
+    // The velocity field edits the selection when there is one, otherwise the velocity for new strokes.
+    const auto& selection = canvas.getSelection();
+    int shownVelocity = processor.getNewStrokeVelocity();
+    for (const auto& t : processor.getPattern().trajectories)
+        if (! selection.empty() && t.id == selection.front())
+            shownVelocity = t.velocity;
+    if (! velocityGesture)
+        velocitySlider.setValue (shownVelocity, juce::dontSendNotification);
+    const auto velocityText = selection.empty() ? juce::String ("Velocity") : juce::String ("Selected velocity");
+    const bool velocityLabelChanged = velocityLabel.getText() != velocityText;
+    velocityLabel.setText (velocityText, juce::dontSendNotification);
+    velocityLabel.setColour (juce::Label::textColourId, selection.empty() ? colour::textSecondary : colour::accent);
     undoButton.setEnabled (processor.canUndo());
     redoButton.setEnabled (processor.canRedo());
 
@@ -192,7 +253,7 @@ void PitchPaintEditor::refresh()
     const auto right = showingStatus ? status : shortcutsHint;
     const auto rightColour = showingStatus ? colour::textPrimary : colour::textSecondary;
 
-    const bool layoutChanged = hint != synthHint.getText() || right != footerRight.getText();
+    const bool layoutChanged = velocityLabelChanged || hint != synthHint.getText() || right != footerRight.getText();
     synthHint.setText (hint, juce::dontSendNotification);
     footerRight.setText (right, juce::dontSendNotification);
     footerRight.setColour (juce::Label::textColourId, rightColour);
@@ -271,6 +332,7 @@ std::vector<std::vector<PitchPaintEditor::Item>> PitchPaintEditor::toolbarGroups
         { { &pencilButton, 64 }, { &selectButton, 64 }, { &eraserButton, 64 } },
         { { &undoButton, 54 }, { &redoButton, 54 } },
         { { nullptr, labelWidth (lengthLabel) }, { &lengthBox, 88 }, { nullptr, labelWidth (snapLabel) }, { &snapBox, 80 } },
+        { { nullptr, labelWidth (velocityLabel) }, { &velocitySlider, 104 } },
         { { nullptr, labelWidth (modeLabel) }, { &modeBox, 140 }, { nullptr, labelWidth (rangeLabel) }, { &rangeSlider, 104 } },
         { { &previewToggle, 92 } },
     };
