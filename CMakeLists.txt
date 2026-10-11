@@ -1,0 +1,36 @@
+﻿cmake_minimum_required(VERSION 3.25)
+project(PitchPaint VERSION 0.1.0 LANGUAGES C CXX)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+include(FetchContent)
+FetchContent_Declare(JUCE
+    GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
+    GIT_TAG 9.0.3
+    GIT_SHALLOW TRUE)
+FetchContent_MakeAvailable(JUCE)
+
+juce_add_plugin(PitchPaint
+    COMPANY_NAME "PitchPaint"
+    PLUGIN_MANUFACTURER_CODE Ptpt
+    PLUGIN_CODE Ptp1
+    FORMATS VST3
+    PRODUCT_NAME "PitchPaint"
+    IS_SYNTH TRUE
+    NEEDS_MIDI_INPUT FALSE
+    NEEDS_MIDI_OUTPUT TRUE
+    VST3_CATEGORIES Instrument Generator
+    COPY_PLUGIN_AFTER_BUILD FALSE)
+
+target_sources(PitchPaint PRIVATE
+    Source/PluginProcessor.cpp)
+
+target_compile_definitions(PitchPaint PUBLIC
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0
+    JUCE_VST3_CAN_REPLACE_VST2=0)
+
+target_link_libraries(PitchPaint
+    PRIVATE juce::juce_audio_utils
+    PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_lto_flags juce::juce_recommended_warning_flags)
