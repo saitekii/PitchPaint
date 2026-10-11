@@ -1,0 +1,33 @@
+name: Build and test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Configure (fetches JUCE)
+        run: cmake -S . -B build -A x64
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      # CoreTests (pattern, MIDI renderer, preview synth, undo, save format) and
+      # EditorTests (the real editor driven offscreen). The REAPER end-to-end check needs REAPER, so it runs locally only.
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Upload VST3
+        uses: actions/upload-artifact@v7
+        with:
+          name: PitchPaint-VST3-windows
+          path: build/PitchPaint_artefacts/Release/VST3/PitchPaint.vst3

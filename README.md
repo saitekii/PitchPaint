@@ -1,5 +1,7 @@
 # PitchPaint
 
+[![Build and test](https://github.com/saitekii/PitchPaint/actions/workflows/build.yml/badge.svg)](https://github.com/saitekii/PitchPaint/actions/workflows/build.yml)
+
 A VST3 plugin for drawing music as free pitch curves. You draw with a pencil on a time × pitch canvas, and pitch is
 **continuous**: a stroke can glide, wobble or sit between semitones. Each stroke plays as one note, strokes can overlap,
 and the plugin drives an **external synthesizer** over MIDI using MPE or pitch bend.
@@ -113,6 +115,9 @@ Other limitations:
 - No MIDI file import or export yet.
 
 ## Tests
+
+GitHub Actions builds the plugin on Windows and runs `CoreTests` and `EditorTests` on every push; the built
+`PitchPaint.vst3` is attached to each run as an artifact.
 
 ```bash
 ctest --test-dir build -C Release
