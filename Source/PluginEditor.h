@@ -23,8 +23,10 @@ private:
     juce::Label lengthLabel { {}, "Loop" }, modeLabel { {}, "Output" }, rangeLabel { {}, "Bend range" };
     juce::ComboBox lengthBox, modeBox;
     juce::Slider rangeSlider { juce::Slider::IncDecButtons, juce::Slider::TextBoxLeft };
+    juce::ToggleButton previewToggle { "Preview" };
     juce::Label hint;
 
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> modeAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> rangeAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> previewAttachment;
 };

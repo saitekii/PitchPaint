@@ -2,6 +2,7 @@
 
 #include "Core/MidiRenderer.h"
 #include "Core/PatternSnapshots.h"
+#include "Core/PreviewSynth.h"
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
@@ -51,6 +52,8 @@ private:
     int patternVersion = 0;
     pitchpaint::PatternSnapshots snapshots;
     pitchpaint::MidiRenderer renderer;
+    pitchpaint::PreviewSynth previewSynth;
+    bool previewWasOn = false;
     std::atomic<double> playheadBeat { 0.0 };
     std::atomic<bool> playing { false };
     pitchpaint::MidiOut events;

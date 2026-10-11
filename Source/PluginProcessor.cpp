@@ -31,7 +31,8 @@ PitchPaintProcessor::PitchPaintProcessor()
       params (*this, nullptr, "PARAMS",
               { std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { "mode", 1 }, "Output mode",
                                                               juce::StringArray { "MPE", "Mono pitch-bend" }, 0),
-                std::make_unique<juce::AudioParameterInt> (juce::ParameterID { "bendRange", 1 }, "Bend range (semitones)", 1, 96, 48) }),
+                std::make_unique<juce::AudioParameterInt> (juce::ParameterID { "bendRange", 1 }, "Bend range (semitones)", 1, 96, 48),
+                std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "preview", 1 }, "Preview sound", false) }),
       pattern (makeDemoPattern()),
       snapshots (pattern)
 {
@@ -48,6 +49,7 @@ void PitchPaintProcessor::prepareToPlay (double sr, int)
 {
     sampleRate = sr;
     events.reserve (8192);
+    previewSynth.prepare (sr);
     needsConfigure = true;
 }
 
@@ -104,6 +106,15 @@ void PitchPaintProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
         wasPlaying = true;
         expectedPpq = *ppq + numSamples * beatsPerSample;
     }
+
+    // Built-in reference sound: plays exactly what the MIDI output says, with our bend range.
+    const bool previewOn = params.getRawParameterValue ("preview")->load() >= 0.5f;
+    if (previewOn)
+        previewSynth.process (events, renderer.getSettings().bendRange,
+                              buffer.getWritePointer (0), buffer.getWritePointer (1), numSamples);
+    else if (previewWasOn)
+        previewSynth.reset();
+    previewWasOn = previewOn;
 
     for (const auto& e : events)
         midi.addEvent (e.bytes.data(), 3, e.sample);

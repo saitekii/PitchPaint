@@ -69,8 +69,52 @@ def check(path, mode, expected_range, beats_per_second=2.0):
     return not failures
 
 
+def check_preview(path, beats_per_second=2.0):
+    """PitchPaint's preview sound in mono mode: the measured frequency must follow the drawn curve (60 = C4 = 261.63 Hz)."""
+    with wave.open(path) as w:
+        sr, n, ch = w.getframerate(), w.getnframes(), w.getnchannels()
+        raw = w.readframes(n)
+    size = ch * 3
+    x = []
+    for i in range(n):
+        b = raw[i * size: i * size + 3]
+        x.append(struct.unpack("<i", b + (b"\xff" if b[2] & 0x80 else b"\x00"))[0] / float(1 << 23))
+
+    failures, max_err, compared = [], 0.0, 0
+    win = int(0.04 * sr)
+    for k in range(1, 64):
+        beat = k * 0.25
+        local = beat % 8.0
+        # Skip note changes and the following 0.3 beats, where the previous note's release tail still sounds.
+        if any(-0.1 < local - b < 0.3 for b in BOUNDARIES):
+            continue
+        active = curves(local)
+        if not active:
+            continue
+        c = int(beat / beats_per_second * sr)
+        seg = x[c - win // 2: c + win // 2]
+        crossings = [i - 1 + seg[i - 1] / (seg[i - 1] - seg[i]) for i in range(1, len(seg)) if seg[i - 1] < 0 <= seg[i]]
+        if len(crossings) < 3:
+            failures.append(f"beat {beat:.2f}: silent, expected a note")
+            continue
+        hz = (len(crossings) - 1) * sr / (crossings[-1] - crossings[0])
+        measured = 69 + 12 * math.log2(hz / 440.0)
+        expected = max(active)[1]  # mono: latest start wins
+        max_err = max(max_err, abs(measured - expected))
+        compared += 1
+
+    if max_err > 0.1:
+        failures.append(f"max pitch error {max_err:.3f} st > 0.1")
+    print(f"audio: preview synth, {compared} points compared, max pitch error {max_err:.3f} st"
+          f" -> {'PASS' if not failures else 'FAIL'}")
+    for f in failures[:10]:
+        print("   ", f)
+    return not failures
+
+
 if __name__ == "__main__":
     d = sys.argv[1]
     ok = check(f"{d}/mpe.wav", "mpe", 48)
     ok &= check(f"{d}/mono.wav", "mono", 12)
+    ok &= check_preview(f"{d}/preview.wav")
     sys.exit(0 if ok else 1)

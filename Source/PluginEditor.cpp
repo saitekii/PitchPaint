@@ -24,6 +24,8 @@ PitchPaintEditor::PitchPaintEditor (PitchPaintProcessor& p)
     modeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (processor.params, "mode", modeBox);
     rangeSlider.setTextBoxStyle (juce::Slider::TextBoxLeft, false, 40, 24);
     rangeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (processor.params, "bendRange", rangeSlider);
+    previewAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (processor.params, "preview", previewToggle);
+    previewToggle.setTooltip ("Built-in sound that plays exactly what is drawn. Use it to check your synth's pitch.");
 
     hint.setText ("Shift: snap  |  Right-drag: erase  |  Ctrl+wheel: zoom",
                   juce::dontSendNotification);
@@ -31,7 +33,7 @@ PitchPaintEditor::PitchPaintEditor (PitchPaintProcessor& p)
     hint.setJustificationType (juce::Justification::centredRight);
     hint.setMinimumHorizontalScale (0.7f);
 
-    for (auto* c : std::initializer_list<juce::Component*> { &lengthLabel, &lengthBox, &modeLabel, &modeBox, &rangeLabel, &rangeSlider, &hint, &canvas })
+    for (auto* c : std::initializer_list<juce::Component*> { &lengthLabel, &lengthBox, &modeLabel, &modeBox, &rangeLabel, &rangeSlider, &previewToggle, &hint, &canvas })
         addAndMakeVisible (c);
 
     setWantsKeyboardFocus (true);
@@ -92,6 +94,8 @@ void PitchPaintEditor::resized()
     rangeLabel.setBounds (bar.removeFromLeft (76));
     rangeSlider.setBounds (bar.removeFromLeft (110));
     bar.removeFromLeft (12);
+    previewToggle.setBounds (bar.removeFromLeft (80));
+    bar.removeFromLeft (8);
     hint.setBounds (bar);
 
     canvas.setBounds (area);

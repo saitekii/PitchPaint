@@ -58,7 +58,7 @@ Invoke-Reaper @("`"$PSScriptRoot\make_projects.lua`"") { Test-Path "$work\make_p
 $log = Get-Content "$work\make_projects.log" -ErrorAction SilentlyContinue
 if ($log -ne "ok") { throw "Project setup failed: $log" }
 
-foreach ($name in "mpe", "mono") {
+foreach ($name in "mpe", "mono", "preview") {
     Invoke-Reaper @("-renderproject", "`"$work\$name.rpp`"") { Test-FileSettled "$work\$name.wav" }
 }
 

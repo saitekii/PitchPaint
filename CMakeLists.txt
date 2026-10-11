@@ -14,7 +14,8 @@ FetchContent_MakeAvailable(JUCE)
 # JUCE-free core: pattern model + MIDI renderer, shared by the plugin and the tests.
 add_library(PitchPaintCore STATIC
     Source/Core/Pattern.cpp
-    Source/Core/MidiRenderer.cpp)
+    Source/Core/MidiRenderer.cpp
+    Source/Core/PreviewSynth.cpp)
 target_include_directories(PitchPaintCore PUBLIC Source)
 if(MSVC)
     target_compile_options(PitchPaintCore PRIVATE /W4)

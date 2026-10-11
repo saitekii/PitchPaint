@@ -1,6 +1,7 @@
 // Plain console tests for the JUCE-free core (Pattern + MidiRenderer). Run via ctest or directly.
 #include "Core/MidiRenderer.h"
 #include "Core/PatternSnapshots.h"
+#include "Core/PreviewSynth.h"
 
 #include <cmath>
 #include <cstdio>
@@ -125,6 +126,61 @@ void testSnapshots()
     CHECK (held.use_count() == 2);              // retained by the store, so releasing `held` won't free it
 }
 
+// Frequency from rising zero crossings (interpolated) within [from, to).
+double measureHz (const std::vector<float>& x, int from, int to)
+{
+    double first = -1.0, last = -1.0;
+    int count = 0;
+    for (int i = from + 1; i < to; ++i)
+        if (x[(size_t) i - 1] < 0.0f && x[(size_t) i] >= 0.0f)
+        {
+            const double t = (i - 1) + x[(size_t) i - 1] / (x[(size_t) i - 1] - x[(size_t) i]);
+            if (first < 0.0) first = t; else ++count;
+            last = t;
+        }
+    return count > 0 ? count * sampleRate / (last - first) : 0.0;
+}
+
+void testPreviewSynthPlaysDrawnPitch()
+{
+    // Draw C4 held flat, then a glide up an octave, render through renderer + preview synth, measure Hz.
+    Pattern p;
+    p.lengthBeats = 8.0;
+    p.trajectories.push_back ({ 1, { { 0.0, 60.0 }, { 2.0, 60.0 }, { 4.0, 72.0 }, { 6.0, 72.0 } } });
+
+    for (const auto& settings : { RenderSettings { OutputMode::mpe, 48 }, RenderSettings { OutputMode::mono, 2 } })
+    {
+        MidiRenderer r;
+        PreviewSynth synth;
+        synth.prepare (sampleRate);
+        MidiOut out;
+        r.configure (settings, out, 0);
+
+        const int total = (int) beatToSample (6.0), block = 480;
+        std::vector<float> left ((size_t) total, 0.0f), right ((size_t) total, 0.0f);
+        for (int s = 0; s < total; s += block)
+        {
+            const int n = std::min (block, total - s);
+            if (s > 0)
+                out.clear();
+            r.render (p, s * bps, bps, n, out);
+            synth.process (out, settings.bendRange, left.data() + s, right.data() + s, n);
+        }
+
+        const auto pitchAt = [&] (double beat)
+        {
+            const int c = (int) beatToSample (beat), w = 2400; // 50 ms window
+            return 69.0 + 12.0 * std::log2 (measureHz (left, c - w / 2, c + w / 2) / 440.0);
+        };
+
+        CHECK (std::abs (pitchAt (1.0) - 60.0) < 0.02);  // C4 = 261.63 Hz
+        CHECK (std::abs (pitchAt (3.0) - 66.0) < 0.05);  // half-way up the glide
+        CHECK (std::abs (pitchAt (5.0) - 72.0) < 0.02);  // C5, reached by bend (MPE) or by retriggers (mono ±2)
+        std::printf ("    [%s] beat1 %.3f  beat3 %.3f  beat5 %.3f\n", settings.mode == OutputMode::mpe ? "mpe " : "mono",
+                     pitchAt (1.0), pitchAt (3.0), pitchAt (5.0));
+    }
+}
+
 void testMpeConfigMessages()
 {
     MidiRenderer r;
@@ -165,13 +221,13 @@ void testSingleNoteTimingAndBend()
     CHECK (ons[0].sample == beatToSample (1.0));  // sample-accurate start
     CHECK (offs[0].sample == beatToSample (3.0)); // sample-accurate end
     CHECK (channelOf (ons[0].event) == 2);
-    CHECK (ons[0].event.bytes[1] == 62); // note centred on the curve (60..64)
+    CHECK (ons[0].event.bytes[1] == 60); // note = nearest semitone to where the curve starts
 
     // The bend right before the note-on, same timestamp, puts the attack at 60.
     size_t onIndex = 0;
     while (! isNoteOn (ev[onIndex].event)) ++onIndex;
     CHECK (onIndex > 0 && isBend (ev[onIndex - 1].event) && ev[onIndex - 1].sample == ons[0].sample);
-    CHECK (std::abs (pitchFromBend (bendOf (ev[onIndex - 1].event), 62, 48) - 60.0) < 0.01);
+    CHECK (std::abs (pitchFromBend (bendOf (ev[onIndex - 1].event), 60, 48) - 60.0) < 0.01);
 
     // Every bend while sounding matches the curve to within one bend step interval.
     double maxErr = 0.0;
@@ -179,7 +235,7 @@ void testSingleNoteTimingAndBend()
         if (isBend (a.event) && a.sample >= ons[0].sample && a.sample < offs[0].sample)
         {
             const double beat = a.sample * bps;
-            maxErr = std::max (maxErr, std::abs (pitchFromBend (bendOf (a.event), 62, 48) - (60.0 + 2.0 * (beat - 1.0))));
+            maxErr = std::max (maxErr, std::abs (pitchFromBend (bendOf (a.event), 60, 48) - (60.0 + 2.0 * (beat - 1.0))));
         }
     CHECK (maxErr < 0.01);
 }
@@ -422,6 +478,7 @@ int main()
         { "pitch interpolation", testPitchInterpolation },
         { "pencil draw segment", testDrawSegment },
         { "pattern snapshots", testSnapshots },
+        { "preview synth plays drawn pitch (Hz)", testPreviewSynthPlaysDrawnPitch },
         { "MPE config messages", testMpeConfigMessages },
         { "single note timing and bend", testSingleNoteTimingAndBend },
         { "block size independence", testBlockSizeIndependence },

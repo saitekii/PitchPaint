@@ -205,13 +205,10 @@ void MidiRenderer::startVoice (Voice& v, int channel, const Trajectory& t, doubl
 {
     const double pitch = t.pitchAt (beat);
 
-    // Centre the note on the whole curve when it fits in the bend range, so it never needs retriggering.
-    const auto [lo, hi] = std::minmax_element (t.points.begin(), t.points.end(),
-                                               [] (const PitchPoint& a, const PitchPoint& b) { return a.pitch < b.pitch; });
-    const double centre = hi->pitch - lo->pitch <= 2.0 * settings.bendRange ? (lo->pitch + hi->pitch) * 0.5 : pitch;
-
+    // The note number is the semitone nearest to where the curve starts, so the attack is in tune and the note
+    // shown by the host/synth matches the drawing even if the synth applies a different bend range than ours.
     v.trajectoryId = t.id;
-    v.note = std::clamp ((int) std::lround (centre), 0, 127);
+    v.note = std::clamp ((int) std::lround (pitch), 0, 127);
     v.bend = bendValue (pitch - v.note);
     v.sounding = true;
     v.lastUsed = ++counter;
