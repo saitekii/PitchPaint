@@ -28,4 +28,27 @@ double Trajectory::pitchAt (double beat) const
     return a.pitch + (b.pitch - a.pitch) * (beat - a.beat) / span;
 }
 
+std::uint32_t Pattern::nextId() const
+{
+    std::uint32_t id = 0;
+    for (const auto& t : trajectories)
+        id = std::max (id, t.id);
+    return id + 1;
+}
+
+void drawSegment (Trajectory& t, PitchPoint from, PitchPoint to)
+{
+    auto& pts = t.points;
+    const double lo = std::min (from.beat, to.beat);
+    const double hi = std::max (from.beat, to.beat);
+
+    pts.erase (std::remove_if (pts.begin(), pts.end(),
+                               [&] (const PitchPoint& p) { return (p.beat > lo && p.beat < hi) || p.beat == to.beat; }),
+               pts.end());
+
+    const auto pos = std::lower_bound (pts.begin(), pts.end(), to.beat,
+                                       [] (const PitchPoint& p, double b) { return p.beat < b; });
+    pts.insert (pos, to);
+}
+
 } // namespace pitchpaint

@@ -28,11 +28,18 @@ struct Trajectory
     double pitchAt (double beat) const;
 };
 
-// A loop of trajectories. Trajectories must lie within [0, lengthBeats].
+// A loop of trajectories. Parts of trajectories beyond lengthBeats don't play.
 struct Pattern
 {
     double lengthBeats = 16.0;
     std::vector<Trajectory> trajectories;
+
+    std::uint32_t nextId() const;
 };
+
+// Pencil stroke step from `from` to `to`: whatever the trajectory had strictly between the two beats is replaced
+// by the straight segment, so drawing back over a stroke redraws it, and drawing left of its start extends it.
+// `from` should already be a point of the trajectory (the previous mouse position).
+void drawSegment (Trajectory&, PitchPoint from, PitchPoint to);
 
 } // namespace pitchpaint

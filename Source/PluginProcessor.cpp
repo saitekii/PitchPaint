@@ -1,4 +1,5 @@
 #include "PluginProcessor.h"
+#include "PluginEditor.h"
 
 namespace
 {
@@ -31,8 +32,16 @@ PitchPaintProcessor::PitchPaintProcessor()
               { std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { "mode", 1 }, "Output mode",
                                                               juce::StringArray { "MPE", "Mono pitch-bend" }, 0),
                 std::make_unique<juce::AudioParameterInt> (juce::ParameterID { "bendRange", 1 }, "Bend range (semitones)", 1, 96, 48) }),
-      pattern (makeDemoPattern())
+      pattern (makeDemoPattern()),
+      snapshots (pattern)
 {
+}
+
+void PitchPaintProcessor::setPattern (pitchpaint::Pattern p)
+{
+    pattern = std::move (p);
+    ++patternVersion;
+    snapshots.publish (pattern);
 }
 
 void PitchPaintProcessor::prepareToPlay (double sr, int)
@@ -69,10 +78,13 @@ void PitchPaintProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
 
     const auto pos = getPlayHead() != nullptr ? getPlayHead()->getPosition() : std::nullopt;
     const auto ppq = pos.hasValue() ? pos->getPpqPosition() : std::nullopt;
-    const bool playing = pos.hasValue() && pos->getIsPlaying() && ppq.hasValue();
+    const bool isPlayingNow = pos.hasValue() && pos->getIsPlaying() && ppq.hasValue();
     const int numSamples = buffer.getNumSamples();
 
-    if (! playing)
+    const auto snapshot = snapshots.acquire();
+    playing.store (isPlayingNow);
+
+    if (! isPlayingNow)
     {
         if (wasPlaying)
             renderer.allNotesOff (events, 0);
@@ -86,7 +98,9 @@ void PitchPaintProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
         if (wasPlaying && std::abs (*ppq - expectedPpq) > 1.0e-3)
             renderer.allNotesOff (events, 0);
 
-        renderer.render (pattern, *ppq, beatsPerSample, numSamples, events);
+        renderer.render (*snapshot, *ppq, beatsPerSample, numSamples, events);
+        if (snapshot->lengthBeats > 0.0)
+            playheadBeat.store (std::fmod (std::max (0.0, *ppq), snapshot->lengthBeats));
         wasPlaying = true;
         expectedPpq = *ppq + numSamples * beatsPerSample;
     }
@@ -97,7 +111,7 @@ void PitchPaintProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
 
 juce::AudioProcessorEditor* PitchPaintProcessor::createEditor()
 {
-    return new juce::GenericAudioProcessorEditor (*this);
+    return new PitchPaintEditor (*this);
 }
 
 void PitchPaintProcessor::getStateInformation (juce::MemoryBlock& dest)

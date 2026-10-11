@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Core/MidiRenderer.h"
+#include "Core/PatternSnapshots.h"
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
@@ -34,11 +35,24 @@ public:
 
     juce::AudioProcessorValueTreeState params;
 
+    // Message thread only. setPattern makes the change audible from the next audio block.
+    const pitchpaint::Pattern& getPattern() const { return pattern; }
+    void setPattern (pitchpaint::Pattern);
+    int getPatternVersion() const { return patternVersion; } // bumped by every setPattern
+
+    // Any thread: loop-local beat at the start of the latest block, and whether the host is playing.
+    double getPlayheadBeat() const { return playheadBeat.load(); }
+    bool isPlaying() const { return playing.load(); }
+
 private:
     pitchpaint::RenderSettings currentSettings() const;
 
     pitchpaint::Pattern pattern;
+    int patternVersion = 0;
+    pitchpaint::PatternSnapshots snapshots;
     pitchpaint::MidiRenderer renderer;
+    std::atomic<double> playheadBeat { 0.0 };
+    std::atomic<bool> playing { false };
     pitchpaint::MidiOut events;
 
     double sampleRate = 44100.0;

@@ -1,5 +1,6 @@
 // Plain console tests for the JUCE-free core (Pattern + MidiRenderer). Run via ctest or directly.
 #include "Core/MidiRenderer.h"
+#include "Core/PatternSnapshots.h"
 
 #include <cmath>
 #include <cstdio>
@@ -75,6 +76,53 @@ void testPitchInterpolation()
     CHECK (t.isPlayable());
     const Trajectory single { 2, { { 1.0, 60.0 } } };
     CHECK (! single.isPlayable());
+}
+
+std::vector<double> beatsOf (const Trajectory& t)
+{
+    std::vector<double> b;
+    for (const auto& p : t.points)
+        b.push_back (p.beat);
+    return b;
+}
+
+void testDrawSegment()
+{
+    Trajectory t { 1, { { 1.0, 60.0 } } };
+    drawSegment (t, { 1.0, 60.0 }, { 1.5, 61.0 });
+    drawSegment (t, { 1.5, 61.0 }, { 2.0, 62.0 });
+    drawSegment (t, { 2.0, 62.0 }, { 3.0, 63.0 });
+    CHECK (beatsOf (t) == std::vector<double> ({ 1.0, 1.5, 2.0, 3.0 }));
+
+    // Dragging back over the stroke redraws it: points between are replaced.
+    drawSegment (t, { 3.0, 63.0 }, { 1.2, 50.0 });
+    CHECK (beatsOf (t) == std::vector<double> ({ 1.0, 1.2, 3.0 }));
+    CHECK (t.pitchAt (1.2) == 50.0);
+
+    // Continuing left past the start extends the stroke.
+    drawSegment (t, { 1.2, 50.0 }, { 0.5, 55.0 });
+    CHECK (beatsOf (t) == std::vector<double> ({ 0.5, 1.2, 3.0 }));
+
+    // Same beat: replaces the pitch there.
+    drawSegment (t, { 0.5, 55.0 }, { 0.5, 57.0 });
+    CHECK (t.points.size() == 3 && t.points.front().pitch == 57.0);
+}
+
+void testSnapshots()
+{
+    Pattern p;
+    p.trajectories.push_back (line (1, 0.0, 60.0, 1.0, 60.0));
+    PatternSnapshots snaps (p);
+    CHECK (p.nextId() == 2);
+
+    auto held = snaps.acquire(); // as if the audio thread were mid-block
+    p.trajectories.clear();
+    snaps.publish (p);
+    snaps.publish (p);
+
+    CHECK (held->trajectories.size() == 1);     // still alive while held
+    CHECK (snaps.acquire()->trajectories.empty());
+    CHECK (held.use_count() == 2);              // retained by the store, so releasing `held` won't free it
 }
 
 void testMpeConfigMessages()
@@ -372,6 +420,8 @@ int main()
 {
     const std::pair<const char*, std::function<void()>> tests[] = {
         { "pitch interpolation", testPitchInterpolation },
+        { "pencil draw segment", testDrawSegment },
+        { "pattern snapshots", testSnapshots },
         { "MPE config messages", testMpeConfigMessages },
         { "single note timing and bend", testSingleNoteTimingAndBend },
         { "block size independence", testBlockSizeIndependence },

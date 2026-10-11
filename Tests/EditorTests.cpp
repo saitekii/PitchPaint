@@ -1,0 +1,183 @@
+// Offscreen GUI test: drives the real editor with synthetic mouse events, checks the pattern and the MIDI it
+// produces, and writes a snapshot PNG of the editor (path given as the first argument, optional).
+#include "PluginEditor.h"
+#include "PluginProcessor.h"
+
+#include <cstdio>
+
+namespace
+{
+int failures = 0;
+
+#define CHECK(cond)                                                              \
+    do {                                                                         \
+        if (! (cond)) {                                                          \
+            std::printf ("    FAILED %s:%d: %s\n", __FILE__, __LINE__, #cond);   \
+            ++failures;                                                          \
+        }                                                                        \
+    } while (false)
+
+struct FakePlayHead final : juce::AudioPlayHead
+{
+    double ppq = 0.0;
+    bool playing = true;
+
+    juce::Optional<PositionInfo> getPosition() const override
+    {
+        PositionInfo info;
+        info.setIsPlaying (playing);
+        info.setPpqPosition (ppq);
+        info.setBpm (120.0);
+        return info;
+    }
+};
+
+juce::MouseEvent makeEvent (juce::Component& c, juce::Point<float> pos, juce::Point<float> downPos, juce::ModifierKeys mods)
+{
+    const auto now = juce::Time::getCurrentTime();
+    return { juce::Desktop::getInstance().getMainMouseSource(), pos, mods, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+             &c, &c, now, downPos, now, 1, pos != downPos };
+}
+
+void drag (juce::Component& c, std::vector<juce::Point<float>> path, juce::ModifierKeys mods = juce::ModifierKeys::leftButtonModifier)
+{
+    c.mouseDown (makeEvent (c, path.front(), path.front(), mods));
+    for (size_t i = 1; i < path.size(); ++i)
+        c.mouseDrag (makeEvent (c, path[i], path.front(), mods));
+    c.mouseUp (makeEvent (c, path.back(), path.front(), mods));
+}
+
+// Pixel position of (beat, pitch) on a canvas of the given size, mirroring PitchCanvas's default view (36..96).
+juce::Point<float> at (juce::Component& canvas, double lengthBeats, double beat, double pitch)
+{
+    const float gutter = 40.0f, w = (float) canvas.getWidth() - gutter, h = (float) canvas.getHeight();
+    return { gutter + (float) (beat / lengthBeats) * w, (float) ((96.0 - pitch) / 60.0) * h };
+}
+
+struct NoteOn
+{
+    int channel, note;
+};
+
+std::vector<NoteOn> playBeats (PitchPaintProcessor& proc, FakePlayHead& head, double fromBeat, double toBeat)
+{
+    std::vector<NoteOn> ons;
+    juce::AudioBuffer<float> audio (2, 512);
+    juce::MidiBuffer midi;
+    head.ppq = fromBeat;
+    head.playing = true;
+    while (head.ppq < toBeat)
+    {
+        proc.processBlock (audio, midi);
+        for (const auto m : midi)
+            if (m.getMessage().isNoteOn())
+                ons.push_back ({ m.getMessage().getChannel(), m.getMessage().getNoteNumber() });
+        head.ppq += 512 * 2.0 / 48000.0;
+    }
+    return ons;
+}
+} // namespace
+
+int main (int argc, char** argv)
+{
+    juce::ScopedJuceInitialiser_GUI juceInit;
+
+    PitchPaintProcessor proc;
+    FakePlayHead head;
+    proc.setPlayHead (&head);
+    proc.prepareToPlay (48000.0, 512);
+
+    std::unique_ptr<juce::AudioProcessorEditor> editor (proc.createEditor());
+    editor->setSize (1000, 560);
+
+    PitchCanvas* canvas = nullptr;
+    for (auto* child : editor->getChildren())
+        if (auto* c = dynamic_cast<PitchCanvas*> (child))
+            canvas = c;
+    CHECK (canvas != nullptr);
+    if (canvas == nullptr)
+        return 1;
+
+    // Start from an empty 4-bar loop.
+    auto empty = proc.getPattern();
+    empty.trajectories.clear();
+    empty.lengthBeats = 16.0;
+    proc.setPattern (empty);
+    const double L = 16.0;
+
+    // 1. Draw a rising glide from beat 1 (C4) to beat 5 (E4 + 30 cents), then a separate, overlapping wiggle.
+    std::vector<juce::Point<float>> glide;
+    for (int i = 0; i <= 40; ++i)
+        glide.push_back (at (*canvas, L, 1.0 + i * 0.1, 60.0 + i * 0.1 * 4.3 / 4.0));
+    drag (*canvas, glide);
+
+    std::vector<juce::Point<float>> wiggle;
+    for (int i = 0; i <= 60; ++i)
+        wiggle.push_back (at (*canvas, L, 3.0 + i * 0.1, 72.0 + 2.0 * std::sin (i * 0.3)));
+    drag (*canvas, wiggle);
+
+    // A click without dragging must not leave a trajectory behind.
+    drag (*canvas, { at (*canvas, L, 12.0, 80.0) });
+
+    // Shift snaps to semitones.
+    drag (*canvas, { at (*canvas, L, 10.0, 64.3), at (*canvas, L, 11.0, 64.4), at (*canvas, L, 12.0, 65.2) },
+          juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | juce::ModifierKeys::shiftModifier));
+
+    const auto& p = proc.getPattern();
+    CHECK (p.trajectories.size() == 3);
+    if (p.trajectories.size() == 3)
+    {
+        const auto& g = p.trajectories[0];
+        CHECK (std::abs (g.startBeat() - 1.0) < 0.02 && std::abs (g.endBeat() - 5.0) < 0.02);
+        CHECK (std::abs (g.pitchAt (3.0) - (60.0 + 2.0 * 4.3 / 4.0)) < 0.15); // continuous, not snapped
+        const auto& s = p.trajectories[2];
+        CHECK (s.pitchAt (10.5) == 64.0 && s.pitchAt (12.5) == 65.0);
+        std::printf ("[info] glide pitch at beat 3 = %.3f (expected %.3f)\n", g.pitchAt (3.0), 60.0 + 2.0 * 4.3 / 4.0);
+    }
+
+    // 2. Playing it produces two overlapping MPE notes on different channels, then the snapped one.
+    const auto ons = playBeats (proc, head, 0.0, 13.0);
+    CHECK (ons.size() == 3);
+    if (ons.size() == 3)
+    {
+        CHECK (ons[0].channel != ons[1].channel);
+        CHECK (ons[0].channel >= 2 && ons[1].channel >= 2);
+        std::printf ("[info] note-ons: ch%d n%d, ch%d n%d, ch%d n%d\n", ons[0].channel, ons[0].note, ons[1].channel,
+                     ons[1].note, ons[2].channel, ons[2].note);
+    }
+
+    // Leave the transport mid-loop so the snapshot shows the playhead and sounding dots,
+    // and let the editor's timer pick up the pattern change (the 4-bar loop set above).
+    playBeats (proc, head, 3.9, 4.0);
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (200);
+    for (auto* child : editor->getChildren())
+        if (auto* box = dynamic_cast<juce::ComboBox*> (child); box != nullptr && box->getText().endsWith ("bars"))
+            CHECK (box->getText() == "4 bars");
+
+    if (argc > 1)
+    {
+        const auto snapshot = editor->createComponentSnapshot (editor->getLocalBounds());
+        const juce::File out { juce::File::getCurrentWorkingDirectory().getChildFile (argv[1]) };
+        out.deleteFile();
+        juce::FileOutputStream stream (out);
+        juce::PNGImageFormat().writeImageToStream (snapshot, stream);
+        std::printf ("[info] wrote %s\n", argv[1]);
+    }
+
+    // 3. Right-drag across the wiggle erases it, and only it.
+    drag (*canvas, { at (*canvas, L, 6.0, 69.0), at (*canvas, L, 6.0, 76.0) },
+          juce::ModifierKeys (juce::ModifierKeys::rightButtonModifier));
+    CHECK (proc.getPattern().trajectories.size() == 2);
+
+    // 4. Loop length change applies to the pattern.
+    auto changed = proc.getPattern();
+    changed.lengthBeats = 4.0;
+    proc.setPattern (changed);
+    CHECK (proc.getPattern().lengthBeats == 4.0);
+
+    proc.setPlayHead (nullptr);
+    editor.reset();
+
+    std::printf ("\n%s (%d failure%s)\n", failures == 0 ? "ALL PASSED" : "FAILURES", failures, failures == 1 ? "" : "s");
+    return failures == 0 ? 0 : 1;
+}

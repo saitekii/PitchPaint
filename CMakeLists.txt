@@ -38,7 +38,9 @@ juce_add_plugin(PitchPaint
     COPY_PLUGIN_AFTER_BUILD FALSE)
 
 target_sources(PitchPaint PRIVATE
-    Source/PluginProcessor.cpp)
+    Source/PluginProcessor.cpp
+    Source/PluginEditor.cpp
+    Source/PitchCanvas.cpp)
 
 target_compile_definitions(PitchPaint PUBLIC
     JUCE_WEB_BROWSER=0
@@ -48,3 +50,20 @@ target_compile_definitions(PitchPaint PUBLIC
 target_link_libraries(PitchPaint
     PRIVATE PitchPaintCore juce::juce_audio_utils
     PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_lto_flags juce::juce_recommended_warning_flags)
+
+# Offscreen editor test: the real processor + editor driven by synthetic mouse events, outside any host.
+juce_add_console_app(EditorTests PRODUCT_NAME "EditorTests")
+target_sources(EditorTests PRIVATE
+    Tests/EditorTests.cpp
+    Source/PluginProcessor.cpp
+    Source/PluginEditor.cpp
+    Source/PitchCanvas.cpp)
+target_compile_definitions(EditorTests PRIVATE
+    JucePlugin_Name="PitchPaint"
+    JUCE_MODAL_LOOPS_PERMITTED=1
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0)
+target_link_libraries(EditorTests PRIVATE
+    PitchPaintCore juce::juce_audio_utils
+    juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
+add_test(NAME EditorTests COMMAND EditorTests)
