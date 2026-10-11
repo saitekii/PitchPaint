@@ -50,10 +50,15 @@ The plugin ends up in `build/PitchPaint_artefacts/Release/VST3/PitchPaint.vst3`.
 | Delete selection | Delete or Backspace |
 | Undo / redo | Ctrl+Z / Ctrl+Y (or Ctrl+Shift+Z), or the toolbar buttons |
 | Select all / deselect | Ctrl+A / Esc |
+| Move selection by keyboard | Arrow keys: ±1 semitone / ±¼ beat; with Alt: ±10 cents / ±1/32 beat |
 | Scroll pitch / time | Mouse wheel / Shift+wheel (or sideways scroll) |
 | Zoom time / pitch | Ctrl+wheel / Alt+wheel |
 
 The horizontal lines sit exactly on semitones (labels: C4 = MIDI 60 = middle C = 261.63 Hz).
+
+Every control has a tooltip, and the bottom bar always shows what your synth needs and confirms edits
+("Deleted 2 strokes. Ctrl+Z to undo."). The toolbar is fully usable from the keyboard (Tab, Space/Enter),
+controls have screen-reader names, and colours meet WCAG AA contrast; see [docs/design-system.md](docs/design-system.md).
 
 > **REAPER and keyboard shortcuts:** REAPER may keep keys for itself. Enable *Send all keyboard input to plugin*
 > in the FX window's menu, or use the toolbar buttons.

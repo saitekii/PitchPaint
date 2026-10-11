@@ -1,6 +1,7 @@
 #pragma once
 
 #include "PluginProcessor.h"
+#include "Theme.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -15,12 +16,16 @@ public:
     // Called (message thread) whenever the pattern changed, including from outside the canvas (undo, state load).
     std::function<void()> onPatternChanged;
 
+    // Short feedback after an edit (shown in the footer and announced to screen readers).
+    std::function<void (const juce::String&)> onStatus;
+
     void setTool (Tool t) { tool = t; }
     Tool getTool() const { return tool; }
 
     void selectAll();
     void clearSelection();
     void deleteSelection();
+    void nudgeSelection (double deltaBeats, double deltaPitch); // keyboard moves, one undo step each
     const std::vector<std::uint32_t>& getSelection() const { return selection; }
 
     // Visible time range in beats (the whole loop unless zoomed in with Ctrl+wheel).
@@ -33,6 +38,8 @@ public:
     void mouseMove (const juce::MouseEvent&) override;
     void mouseExit (const juce::MouseEvent&) override;
     void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
+    void focusGained (FocusChangeType) override;
+    void focusLost (FocusChangeType) override;
 
 private:
     static constexpr float gutter = 40.0f; // note-name column on the left
@@ -50,6 +57,9 @@ private:
     void paintGrid (juce::Graphics&, const pitchpaint::Pattern&);
     void paintTrajectories (juce::Graphics&, const pitchpaint::Pattern&);
     void paintPlayhead (juce::Graphics&, const pitchpaint::Pattern&);
+    void paintStatus (juce::Graphics&, const pitchpaint::Pattern&);
+    void updateAccessibleDescription();
+    void report (const juce::String&);
 
     std::vector<juce::Line<float>> segmentsOf (const pitchpaint::Trajectory&) const;
     bool sweepHits (const pitchpaint::Trajectory&, juce::Line<float> swept, float radius) const;
@@ -76,5 +86,9 @@ private:
     juce::Rectangle<float> box;
 
     double lastPaintedPlayhead = -1.0;
+    bool lastPaintedPlaying = false;
+    bool focusFromKeyboard = false;          // focus ring only for keyboard focus, not after clicks
+    std::vector<std::uint32_t> erasedIds;   // strokes touched by the current erase gesture (for feedback)
+    int erasedWhole = 0;
     int lastSeenVersion = -1;
 };

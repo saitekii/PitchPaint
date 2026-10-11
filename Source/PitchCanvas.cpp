@@ -1,28 +1,11 @@
 #include "PitchCanvas.h"
+#include "LookAndFeel.h"
 
 namespace
 {
-    namespace colours
-    {
-        const juce::Colour background { 0xff1b1d23 };
-        const juce::Colour blackKeyRow { 0xff17191e };
-        const juce::Colour gutter { 0xff22252c };
-        const juce::Colour semitoneLine { 0xff2a2d35 };
-        const juce::Colour octaveLine { 0xff3c414c };
-        const juce::Colour beatLine { 0xff2a2d35 };
-        const juce::Colour barLine { 0xff464b57 };
-        const juce::Colour label { 0xff9aa0ab };
-        const juce::Colour playhead { 0xffe8e8e8 };
-    }
+    namespace colour = theme::colour;
 
-    juce::Colour trajectoryColour (std::uint32_t id)
-    {
-        static const juce::Colour palette[] = {
-            juce::Colour (0xff4fc3f7), juce::Colour (0xffffb74d), juce::Colour (0xff81c784), juce::Colour (0xfff06292),
-            juce::Colour (0xffba68c8), juce::Colour (0xfffff176), juce::Colour (0xff4db6ac), juce::Colour (0xffff8a65),
-        };
-        return palette[id % std::size (palette)];
-    }
+    juce::String strokes (int n) { return juce::String (n) + (n == 1 ? " stroke" : " strokes"); }
 
     bool isBlackKey (int note)
     {
@@ -38,7 +21,37 @@ PitchCanvas::PitchCanvas (PitchPaintProcessor& p) : processor (p)
 {
     setOpaque (true);
     setWantsKeyboardFocus (true); // keys bubble up to the editor's shortcuts
+    setTitle ("Pitch canvas");
+    setHelpText ("Time runs left to right, pitch bottom to top. Pencil: drag to draw. Select: click or drag a box, "
+                 "then drag or use the arrow keys to move. Eraser: drag across strokes.");
+    updateAccessibleDescription();
     startTimerHz (30);
+}
+
+void PitchCanvas::updateAccessibleDescription()
+{
+    const auto& p = processor.getPattern();
+    const int bars = juce::roundToInt (p.lengthBeats / 4.0);
+    setDescription (strokes ((int) p.trajectories.size()) + " in a " + juce::String (bars) + "-bar"
+                    + " loop. " + juce::String ((int) selection.size()) + " selected.");
+}
+
+void PitchCanvas::focusGained (FocusChangeType cause)
+{
+    focusFromKeyboard = cause == focusChangedByTabKey || cause == focusChangedDirectly;
+    repaint();
+}
+
+void PitchCanvas::focusLost (FocusChangeType)
+{
+    focusFromKeyboard = false;
+    repaint();
+}
+
+void PitchCanvas::report (const juce::String& message)
+{
+    if (onStatus)
+        onStatus (message);
 }
 
 juce::Rectangle<float> PitchCanvas::plotArea() const
@@ -97,20 +110,78 @@ void PitchCanvas::paint (juce::Graphics& g)
 
     if (tool == Tool::eraser && hoverPos)
     {
-        g.setColour (juce::Colours::white.withAlpha (0.6f));
+        g.setColour (colour::textPrimary.withAlpha (0.6f));
         g.drawEllipse (juce::Rectangle<float> (2.0f * eraseRadius, 2.0f * eraseRadius).withCentre (*hoverPos), 1.0f);
     }
+
+    paintStatus (g, pattern);
+
+    if (focusFromKeyboard && hasKeyboardFocus (false))
+        PitchPaintLookAndFeel::drawFocusRing (g, plotArea());
+}
+
+void PitchCanvas::paintStatus (juce::Graphics& g, const pitchpaint::Pattern& pattern)
+{
+    const auto area = plotArea();
+
+    // Transport state, so it's clear why nothing plays while the host is stopped.
+    const bool playing = processor.isPlaying();
+    const auto chipText = playing ? juce::String ("Playing") : juce::String ("Stopped - press Play in your DAW");
+    const juce::Font chipFont (theme::type::caption());
+    const float chipW = juce::GlyphArrangement::getStringWidth (chipFont, chipText) + 2.0f * theme::space::m + 10.0f;
+    const auto chip = juce::Rectangle<float> (area.getRight() - chipW - theme::space::s, area.getY() + theme::space::s, chipW, 22.0f);
+    g.setColour (colour::surface.withAlpha (0.9f));
+    g.fillRoundedRectangle (chip, 11.0f);
+    // Shape as well as colour: a filled triangle for playing, a square for stopped.
+    const auto icon = chip.withWidth (10.0f).withSizeKeepingCentre (8.0f, 8.0f).translated ((float) theme::space::m, 0.0f);
+    g.setColour (playing ? colour::accent : colour::textSecondary);
+    if (playing)
+    {
+        juce::Path tri;
+        tri.addTriangle (icon.getTopLeft(), icon.getBottomLeft(), { icon.getRight(), icon.getCentreY() });
+        g.fillPath (tri);
+    }
+    else
+    {
+        g.fillRect (icon);
+    }
+    g.setColour (colour::textSecondary);
+    g.setFont (chipFont);
+    g.drawText (chipText, chip.withTrimmedLeft ((float) theme::space::m + 14.0f), juce::Justification::centredLeft);
+
+    if (! pattern.trajectories.empty())
+        return;
+
+    // Empty state: what this screen is and what to do first.
+    const auto message = area.withSizeKeepingCentre (juce::jmin (460.0f, area.getWidth() - 2.0f * theme::space::xl), 84.0f);
+    g.setColour (colour::textPrimary);
+    g.setFont (juce::Font (theme::type::emptyStateTitle()));
+    g.drawText ("Draw a pitch curve", message.withHeight (28.0f), juce::Justification::centred);
+    g.setColour (colour::textSecondary);
+    g.setFont (juce::Font (theme::type::body()));
+    g.drawFittedText ("Drag with the Pencil anywhere on the grid. Pitch is continuous; hold Shift to snap to semitones.",
+                      message.withTrimmedTop (34.0f).toNearestInt(), juce::Justification::centredTop, 2);
+}
+
+void PitchCanvas::nudgeSelection (double deltaBeats, double deltaPitch)
+{
+    if (selection.empty())
+        return;
+    auto pattern = processor.getPattern();
+    pitchpaint::moveTrajectories (pattern, selection, deltaBeats, deltaPitch);
+    processor.applyEdit (std::move (pattern));
+    repaint();
 }
 
 void PitchCanvas::paintGrid (juce::Graphics& g, const pitchpaint::Pattern& pattern)
 {
     const auto area = plotArea();
-    g.fillAll (colours::background);
+    g.fillAll (colour::canvas);
 
     const float pxPerSemitone = area.getHeight() / (float) (topPitch - bottomPitch);
     const bool labelEveryNote = pxPerSemitone >= 14.0f;
 
-    g.setColour (colours::gutter);
+    g.setColour (colour::surface);
     g.fillRect (getLocalBounds().toFloat().withWidth (gutter));
     g.setFont (juce::FontOptions (11.0f));
 
@@ -121,17 +192,17 @@ void PitchCanvas::paintGrid (juce::Graphics& g, const pitchpaint::Pattern& patte
 
         if (isBlackKey (n))
         {
-            g.setColour (colours::blackKeyRow);
+            g.setColour (colour::blackKeyRow);
             g.fillRect (juce::Rectangle<float> (area.getX(), y - pxPerSemitone * 0.5f, area.getWidth(), pxPerSemitone));
         }
 
         const bool isC = n % 12 == 0;
-        g.setColour (isC ? colours::octaveLine : colours::semitoneLine);
+        g.setColour (isC ? colour::gridOctave : colour::gridSemitone);
         g.drawHorizontalLine (juce::roundToInt (y), area.getX(), area.getRight());
 
         if (isC || labelEveryNote)
         {
-            g.setColour (isC ? colours::label : colours::label.withAlpha (0.6f));
+            g.setColour (isC ? colour::textSecondary : colour::textSecondary.withAlpha (0.6f));
             g.drawText (juce::MidiMessage::getMidiNoteName (n, true, true, 4),
                         juce::Rectangle<float> (0.0f, y - 7.0f, gutter - 6.0f, 14.0f), juce::Justification::centredRight);
         }
@@ -148,13 +219,13 @@ void PitchCanvas::paintGrid (juce::Graphics& g, const pitchpaint::Pattern& patte
         const double beat = k * step;
         const bool isBar = std::fmod (beat, 4.0) == 0.0;
         const bool isBeat = std::fmod (beat, 1.0) == 0.0;
-        g.setColour (isBar ? colours::barLine : (isBeat ? colours::beatLine : colours::beatLine.withAlpha (0.5f)));
+        g.setColour (isBar ? colour::gridBar : (isBeat ? colour::gridBeat : colour::gridBeat.withAlpha (0.5f)));
         const int x = juce::roundToInt (beatToX (beat));
         g.drawVerticalLine (x, area.getY(), area.getBottom());
 
         if (isBar && beat < pattern.lengthBeats)
         {
-            g.setColour (colours::label);
+            g.setColour (colour::textSecondary);
             g.drawText (juce::String ((int) (beat / 4.0) + 1), juce::Rectangle<float> ((float) x + 4.0f, area.getY() + 2.0f, 40.0f, 14.0f),
                         juce::Justification::centredLeft);
         }
@@ -169,7 +240,7 @@ void PitchCanvas::paintTrajectories (juce::Graphics& g, const pitchpaint::Patter
             continue;
 
         const bool selected = isSelected (t.id);
-        g.setColour (trajectoryColour (t.id));
+        g.setColour (colour::forStroke (t.id));
 
         if (t.points.size() == 1)
         {
@@ -185,18 +256,18 @@ void PitchCanvas::paintTrajectories (juce::Graphics& g, const pitchpaint::Patter
 
         if (selected)
         {
-            g.setColour (juce::Colours::white.withAlpha (0.85f));
+            g.setColour (colour::selection.withAlpha (0.85f));
             g.strokePath (path, juce::PathStrokeType (6.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-            g.setColour (trajectoryColour (t.id));
+            g.setColour (colour::forStroke (t.id));
         }
         g.strokePath (path, juce::PathStrokeType (selected ? 3.0f : 2.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     }
 
     if (! box.isEmpty())
     {
-        g.setColour (juce::Colours::white.withAlpha (0.08f));
+        g.setColour (colour::selection.withAlpha (0.08f));
         g.fillRect (box);
-        g.setColour (juce::Colours::white.withAlpha (0.5f));
+        g.setColour (colour::selection.withAlpha (0.5f));
         g.drawRect (box, 1.0f);
     }
 }
@@ -210,7 +281,7 @@ void PitchCanvas::paintPlayhead (juce::Graphics& g, const pitchpaint::Pattern& p
     const auto area = plotArea();
     const float x = beatToX (beat);
 
-    g.setColour (colours::playhead.withAlpha (0.7f));
+    g.setColour (colour::playhead.withAlpha (0.7f));
     g.drawVerticalLine (juce::roundToInt (x), area.getY(), area.getBottom());
 
     // Mark where each sounding trajectory is right now.
@@ -220,9 +291,9 @@ void PitchCanvas::paintPlayhead (juce::Graphics& g, const pitchpaint::Pattern& p
             continue;
 
         const juce::Point<float> p { x, pitchToY (t.pitchAt (beat)) };
-        g.setColour (trajectoryColour (t.id));
+        g.setColour (colour::forStroke (t.id));
         g.fillEllipse (juce::Rectangle<float> (10.0f, 10.0f).withCentre (p));
-        g.setColour (colours::playhead);
+        g.setColour (colour::playhead);
         g.drawEllipse (juce::Rectangle<float> (10.0f, 10.0f).withCentre (p), 1.5f);
     }
 }
@@ -240,6 +311,13 @@ void PitchCanvas::timerCallback()
                                               [id] (const auto& t) { return t.id == id; }); });
         if (onPatternChanged)
             onPatternChanged();
+        updateAccessibleDescription();
+        repaint();
+    }
+
+    if (const bool playing = processor.isPlaying(); playing != lastPaintedPlaying)
+    {
+        lastPaintedPlaying = playing;
         repaint();
     }
 
@@ -316,9 +394,10 @@ void PitchCanvas::deleteSelection()
     if (selection.empty())
         return;
     auto pattern = processor.getPattern();
-    std::erase_if (pattern.trajectories, [this] (const auto& t) { return isSelected (t.id); });
+    const auto removed = std::erase_if (pattern.trajectories, [this] (const auto& t) { return isSelected (t.id); });
     selection.clear();
     processor.applyEdit (std::move (pattern));
+    report ("Deleted " + strokes ((int) removed) + ". Ctrl+Z to undo.");
     repaint();
 }
 
@@ -331,6 +410,8 @@ void PitchCanvas::mouseDown (const juce::MouseEvent& e)
     if (tool == Tool::eraser || e.mods.isRightButtonDown())
     {
         drag = Drag::erasing;
+        erasedIds.clear();
+        erasedWhole = 0;
         lastErasePos = e.position;
         eraseAlong (e.position, e.position, e.mods.isShiftDown());
         return;
@@ -449,6 +530,11 @@ void PitchCanvas::mouseUp (const juce::MouseEvent&)
         drawingId = 0;
     }
 
+    if (drag == Drag::erasing && erasedWhole > 0)
+        report ("Deleted " + strokes (erasedWhole) + ". Ctrl+Z to undo.");
+    else if (drag == Drag::erasing && ! erasedIds.empty())
+        report ("Erased part of " + strokes ((int) erasedIds.size()) + ". Ctrl+Z to undo.");
+
     processor.endGesture(); // one undo step for the whole stroke / move / erase swipe
     drag = Drag::none;
     box = {};
@@ -463,7 +549,9 @@ void PitchCanvas::eraseAlong (juce::Point<float> from, juce::Point<float> to, bo
     if (wholeStrokes)
     {
         // Delete every trajectory the mouse swept over since the last event, so fast swipes don't skip strokes.
-        changed = std::erase_if (pattern.trajectories, [&] (const auto& t) { return sweepHits (t, { from, to }, eraseRadius); }) > 0;
+        const auto removed = std::erase_if (pattern.trajectories, [&] (const auto& t) { return sweepHits (t, { from, to }, eraseRadius); });
+        erasedWhole += (int) removed;
+        changed = removed > 0;
     }
     else
     {
@@ -479,7 +567,11 @@ void PitchCanvas::eraseAlong (juce::Point<float> from, juce::Point<float> to, bo
                     hit.push_back (t.id);
 
             for (const auto id : hit)
+            {
                 pitchpaint::cutTrajectory (pattern, id, xToBeat (pos.x - eraseRadius), xToBeat (pos.x + eraseRadius));
+                if (std::find (erasedIds.begin(), erasedIds.end(), id) == erasedIds.end())
+                    erasedIds.push_back (id);
+            }
             changed |= ! hit.empty();
         }
     }

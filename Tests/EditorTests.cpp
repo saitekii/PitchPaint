@@ -105,6 +105,55 @@ int main (int argc, char** argv)
     proc.setPattern (empty);
     const double L = 16.0;
 
+    const auto saveSnapshot = [&] (int argIndex)
+    {
+        if (argc <= argIndex)
+            return;
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (50); // let timers refresh labels
+        const auto snapshot = editor->createComponentSnapshot (editor->getLocalBounds());
+        juce::FileOutputStream stream (juce::File::getCurrentWorkingDirectory().getChildFile (argv[argIndex]));
+        stream.setPosition (0);
+        stream.truncate();
+        juce::PNGImageFormat().writeImageToStream (snapshot, stream);
+    };
+
+    // 0. Design-system checks: WCAG AA contrast for text (4.5:1) and for UI parts and strokes (3:1).
+    {
+        namespace c = theme::colour;
+        for (const auto bg : { c::surface, c::canvas, c::control, c::controlHover, c::elevated })
+        {
+            CHECK (theme::contrastRatio (c::textPrimary, bg) >= 4.5);
+            CHECK (theme::contrastRatio (c::textSecondary, bg) >= 4.5);
+        }
+        CHECK (theme::contrastRatio (c::warning, c::surface) >= 4.5);
+        CHECK (theme::contrastRatio (c::textOnAccent, c::accent) >= 4.5);
+        CHECK (theme::contrastRatio (c::borderControl, c::surface) >= 3.0);
+        CHECK (theme::contrastRatio (c::focusRing, c::surface) >= 3.0 && theme::contrastRatio (c::focusRing, c::canvas) >= 3.0);
+        CHECK (theme::contrastRatio (c::accent, c::surface) >= 3.0);
+        CHECK (theme::contrastRatio (c::playhead, c::canvas) >= 3.0);
+        for (const auto s : c::strokes)
+            CHECK (theme::contrastRatio (s, c::canvas) >= 3.0);
+        std::printf ("[info] contrast: secondary text on surface %.2f, control border %.2f, focus ring %.2f\n",
+                     theme::contrastRatio (c::textSecondary, c::surface), theme::contrastRatio (c::borderControl, c::surface),
+                     theme::contrastRatio (c::focusRing, c::surface));
+
+        // Every interactive control has an accessible name.
+        for (auto* child : editor->getChildren())
+            if (child->getWantsKeyboardFocus() || dynamic_cast<juce::Button*> (child) != nullptr)
+            {
+                // Offscreen there are no accessibility handlers, so check the source of the name: an explicit title,
+                // or a button's text (which JUCE's button accessibility uses as its name).
+                const auto* button = dynamic_cast<juce::Button*> (child);
+                const bool named = child->getTitle().isNotEmpty() || (button != nullptr && button->getButtonText().isNotEmpty());
+                CHECK (named);
+                if (! named)
+                    std::printf ("    unnamed control: %s\n", typeid (*child).name());
+            }
+    }
+
+    // Empty state on first use.
+    saveSnapshot (4);
+
     // 1. Draw a rising glide from beat 1 (C4) to beat 5 (E4 + 30 cents), then a separate, overlapping wiggle.
     std::vector<juce::Point<float>> glide;
     for (int i = 0; i <= 40; ++i)
@@ -319,6 +368,59 @@ int main (int argc, char** argv)
         for (int i = 0; i < 10; ++i)
             wheelAt (8.0, -0.5, ctrlMods);
         CHECK (canvas->getVisibleBeats() == juce::Range<double> (0.0, L));
+    }
+
+    // 11. Feedback and keyboard editing: arrow keys move the selection (one undo step each); deleting reports what
+    //     happened in the footer; undo is announced too.
+    {
+        const auto footerText = [&]
+        {
+            juce::String text;
+            for (auto* child : editor->getChildren())
+                if (auto* label = dynamic_cast<juce::Label*> (child); label != nullptr && label->getText().endsWith ("."))
+                    text = label->getText();
+            return text;
+        };
+
+        CHECK (press (juce::KeyPress ('s')));
+        CHECK (press (ctrl ('a')));
+        const auto before = proc.getPattern();
+        CHECK (press (juce::KeyPress (juce::KeyPress::upKey)));
+        CHECK (std::abs (proc.getPattern().trajectories[0].points[0].pitch - (before.trajectories[0].points[0].pitch + 1.0)) < 1e-9);
+        CHECK (press (juce::KeyPress (juce::KeyPress::rightKey, juce::ModifierKeys::altModifier, 0)));
+        CHECK (std::abs (proc.getPattern().trajectories[0].startBeat() - (before.trajectories[0].startBeat() + 1.0 / 32.0)) < 1e-9);
+        proc.undo();
+        proc.undo();
+        CHECK (proc.getPattern() == before);
+
+        CHECK (press (ctrl ('a')));
+        CHECK (press (juce::KeyPress (juce::KeyPress::deleteKey)));
+        CHECK (proc.getPattern().trajectories.empty());
+        CHECK (footerText().startsWith ("Deleted " + juce::String ((int) before.trajectories.size()) + " strokes"));
+        std::printf ("[info] footer after delete: \"%s\"\n", footerText().toRawUTF8());
+        CHECK (press (ctrl ('z')));
+        CHECK (proc.getPattern() == before && footerText() == "Undone.");
+    }
+
+    // 12. Narrow window: the toolbar wraps instead of overlapping, everything stays inside, the canvas keeps space.
+    {
+        editor->setSize (560, 400);
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+        std::vector<juce::Rectangle<int>> boxes;
+        for (auto* child : editor->getChildren())
+            if (child->isVisible() && child != canvas && dynamic_cast<juce::Label*> (child) == nullptr && child->getY() < canvas->getY())
+                boxes.push_back (child->getBounds());
+        bool overlap = false, outside = false;
+        for (size_t i = 0; i < boxes.size(); ++i)
+        {
+            outside |= boxes[i].getRight() > editor->getWidth();
+            for (size_t j = i + 1; j < boxes.size(); ++j)
+                overlap |= boxes[i].intersects (boxes[j]);
+        }
+        CHECK (! overlap && ! outside);
+        CHECK (canvas->getHeight() > 200);
+        std::printf ("[info] narrow: %d toolbar controls, canvas %dx%d\n", (int) boxes.size(), canvas->getWidth(), canvas->getHeight());
+        saveSnapshot (5);
     }
 
     proc.setPlayHead (nullptr);

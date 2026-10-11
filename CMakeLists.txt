@@ -42,7 +42,8 @@ juce_add_plugin(PitchPaint
 target_sources(PitchPaint PRIVATE
     Source/PluginProcessor.cpp
     Source/PluginEditor.cpp
-    Source/PitchCanvas.cpp)
+    Source/PitchCanvas.cpp
+    Source/LookAndFeel.cpp)
 
 target_compile_definitions(PitchPaint PUBLIC
     JUCE_WEB_BROWSER=0
@@ -59,7 +60,8 @@ target_sources(EditorTests PRIVATE
     Tests/EditorTests.cpp
     Source/PluginProcessor.cpp
     Source/PluginEditor.cpp
-    Source/PitchCanvas.cpp)
+    Source/PitchCanvas.cpp
+    Source/LookAndFeel.cpp)
 target_compile_definitions(EditorTests PRIVATE
     JucePlugin_Name="PitchPaint"
     JUCE_MODAL_LOOPS_PERMITTED=1
